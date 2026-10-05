@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Distribution of Food Kit/Rice - <%= className %> <%= academicYear %></title>
+
+<style>
+@page {
+    size: A4 portrait;
+    margin: 0;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 210mm;
+    height: 297mm;
+    font-family: 'Times New Roman', 'Arial', sans-serif;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.page-container {
+    width: 100%;
+    min-height: 100%;
+    padding: 10mm 8mm;
+    border: 2px solid #000;
+    position: relative;
+    page-break-after: always;
+    box-sizing: border-box;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+}
+
+.page-container:last-child {
+    page-break-after: auto;
+}
+
+/* Logo Watermark - Centered correctly */
+.logo-watermark {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.logo-watermark img {
+    max-width: 120mm;
+    max-height: 120mm;
+    width: auto;
+    height: auto;
+    opacity: 0.04;
+    object-fit: contain;
+}
+
+.logo-watermark .watermark-text {
+    font-size: 40px;
+    font-weight: bold;
+    color: rgba(0, 0, 0, 0.04);
+    text-transform: uppercase;
+    letter-spacing: 5px;
+    white-space: nowrap;
+    transform: rotate(-45deg);
+}
+
+.content-layer {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+/* Main content */
+.main-content {
+    flex: 1;
+}
+
+/* Header - Compact */
+.header {
+    text-align: center;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1.5px solid #000;
+}
+
+.school-logo {
+    width: 20mm;
+    height: 20mm;
+    margin: 0 auto 3px;
+}
+
+.school-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.school-name {
+    font-size: 13px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+}
+
+.arabic-text {
+    font-size: 11px;
+    font-weight: bold;
+    margin-bottom: 2px;
+    color: #333;
+}
+
+.title {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.subtitle {
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+.class-info {
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.page-number {
+    float: right;
+    font-size: 8px;
+    margin-top: 3px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+}
+
+/* Table */
+.table-container {
+    margin-top: 5px;
+    flex: 1;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9px;
+    table-layout: fixed;
+}
+
+th, td {
+    border: 1px solid #000;
+    padding: 4px 3px;
+    text-align: left;
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+th {
+    background: #f0f0f000;
+    font-weight: 900;
+    text-align: center;
+    text-transform: uppercase;
+    font-size: 8px;
+    padding: 5px 3px;
+}
+
+td {
+    background: #ffffff00;
+}
+
+/* Column widths */
+th:nth-child(1), td:nth-child(1) { width: 6%; text-align: center; }
+th:nth-child(2), td:nth-child(2) { width: 9%; text-align: center; }
+th:nth-child(3), td:nth-child(3) { width: 25%; font-weight: 600; padding-left: 5px; }
+th:nth-child(4), td:nth-child(4) { width: 30%; }
+th:nth-child(5), td:nth-child(5) { width: 15%; }
+th:nth-child(6), td:nth-child(6) { width: 15%; }
+
+.text-center { 
+    text-align: center; 
+}
+
+/* Zebra striping */
+tbody tr:nth-child(even) td {
+    background-color: #f9f9f900;
+}
+
+/* Bottom Section */
+.bottom-section {
+    margin-top: auto;
+    padding-top: 10px;
+}
+
+/* Footer */
+.footer {
+    margin-top: 8px;
+    padding-top: 5px;
+    border-top: 1px solid #000;
+    overflow: hidden;
+    font-size: 9px;
+}
+
+.total-students {
+    float: left;
+    font-weight: 700;
+}
+
+.generated-info {
+    float: right;
+}
+
+.class-teacher-sign {
+    margin-top: 12px;
+    float: right;
+    width: 180px;
+    text-align: center;
+}
+
+.signature-line {
+    margin-top: 20px;
+    border-top: 1px solid #000;
+    width: 100%;
+}
+
+/* Print optimization */
+@media print {
+    html, body {
+        width: 210mm;
+        height: 297mm;
+        margin: 0;
+        padding: 0;
+    }
+    
+    th {
+        background: #f0f0f000 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    tbody tr:nth-child(even) td {
+        background-color: #f9f9f900 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    .page-container {
+        border: 2px solid #000;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        page-break-after: always;
+    }
+    
+    .logo-watermark {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<%
+const studentsPerPage = 40;
+const totalPages = Math.ceil(students.length / studentsPerPage);
+const displayDistributionType = typeof distributionType !== 'undefined' ? distributionType : 'Food Kit/Rice';
+const displaySchoolName = typeof schoolName !== 'undefined' ? schoolName : 'P.P.M.H.S.S. KOTTUKKARA';
+const displaySchoolLogo = typeof schoolLogo !== 'undefined' ? schoolLogo : '';
+
+for (let page = 0; page < totalPages; page++) {
+    const startIndex = page * studentsPerPage;
+    const endIndex = Math.min(startIndex + studentsPerPage, students.length);
+    const pageStudents = students.slice(startIndex, endIndex);
+    const isFirstPage = page === 0;
+    const isLastPage = page === totalPages - 1;
+%>
+
+<div class="page-container">
+    
+    <!-- Logo Watermark - Centered -->
+    <div class="logo-watermark">
+        <% if (displaySchoolLogo) { %>
+            <img src="<%= displaySchoolLogo %>" alt="Watermark">
+        <% } else { %>
+            <div class="watermark-text"><%= displaySchoolName %></div>
+        <% } %>
+    </div>
+    
+    <div class="content-layer">
+        
+        <div class="main-content">
+            
+            <!-- Compact Header -->
+            <div class="header">
+                <% if (isFirstPage && displaySchoolLogo) { %>
+                <div class="school-logo">
+                    <img src="<%= displaySchoolLogo %>" alt="School Logo">
+                </div>
+                <% } %>
+                <div class="school-name"><%= displaySchoolName %></div>
+                <div class="title">DISTRIBUTION OF <%= displayDistributionType.toUpperCase() %></div>
+                <div class="subtitle">List of Students</div>
+                <div class="class-info">Standard and Division : <%= className %> | <%= academicYear %></div>
+            </div>
+            
+            <!-- Table -->
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sl No</th>
+                            <th>Admn No</th>
+                            <th>Name of Student</th>
+                            <th>Name of Parent</th>
+                            <th>Signature of Parent</th>
+                            <th>Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% 
+                        pageStudents.forEach(function(student, index) { 
+                            const slNo = startIndex + index + 1;
+                        %>
+                        <tr>
+                            <td class="text-center"><%= slNo %></td>
+                            <td class="text-center"><%= student.admissionNo %></td>
+                            <td><%= student.name %></td>
+                            <td><%= student.parentName %></td>
+                            <td>&nbsp;</td>
+                            <td>&nbsp;</td>
+                        </tr>
+                        <% }); %>
+                    </tbody>
+                </table>
+            </div>
+            
+        </div>
+        
+        <!-- Footer Section -->
+        <% if (isLastPage) { %>
+        <div class="bottom-section">
+            <div class="class-teacher-sign">
+                <div>Class Teacher</div>
+                <div class="signature-line"></div>
+            </div>
+            <div class="footer">
+                <span class="total-students">Total Students: <%= students.length %></span>
+                <span class="generated-info"><%= new Date().toLocaleDateString('en-IN') %></span>
+            </div>
+        </div>
+        <% } %>
+        
+        <div class="page-number">Page <%= page + 1 %> of <%= totalPages %></div>
+        
+    </div>
+</div>
+
+<% } %>
+
+</body>
+</html>

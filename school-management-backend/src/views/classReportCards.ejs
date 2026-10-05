@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Class Report Cards - <%= className %> <%= academicYear %></title>
+
+<style>
+@page {
+    size: A4 portrait;
+    margin: 0;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 210mm;
+    font-family: "Times New Roman", serif;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.page-container {
+    width: 196mm;
+    height: 275mm;
+    margin: 5mm auto;
+    padding: 8mm 8mm 6mm 8mm;
+    border: 1.5px solid #000;
+    position: relative;
+    page-break-after: always;
+    page-break-inside: avoid;
+    box-sizing: border-box;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+}
+
+.page-container:last-child,
+.page-container:last-of-type {
+    page-break-after: avoid !important;
+}
+
+/* Logo Watermark */
+.logo-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 140mm;
+    height: 140mm;
+    opacity: 0.04;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.logo-watermark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.content-layer {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+/* Main content */
+.main-content {
+    flex: 1;
+}
+
+/* Header Section */
+.header-section {
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.school-logo {
+    width: 25mm;
+    height: 25mm;
+    margin: 0 auto 5px;
+}
+
+.school-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.school-name {
+    font-size: 14px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 3px;
+}
+
+.arabic-text {
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #333;
+}
+
+.report-title {
+    font-size: 16px;
+    font-weight: 900;
+    text-transform: uppercase;
+    text-decoration: underline;
+    margin-bottom: 15px;
+}
+
+/* Student Info */
+.student-info {
+    margin-bottom: 15px;
+    font-size: 11px;
+}
+
+.info-row {
+    margin-bottom: 3px;
+    font-weight: bold;
+}
+
+.info-label {
+    display: inline-block;
+    width: 140px;
+}
+
+.info-value {
+    font-weight: normal;
+}
+
+/* Marks Table */
+.marks-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 6px 0;
+    font-size: 11px;
+}
+
+.marks-table th,
+.marks-table td {
+    border: 1px solid #000;
+    padding: 12px 5px;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.marks-table th {
+    background: #f0f0f0;
+    font-weight: 900;
+    text-transform: uppercase;
+    font-size: 9.5px;
+    padding: 9px 4px;
+}
+
+.marks-table td:first-child {
+    text-align: left;
+    font-weight: 600;
+    padding-left: 8px;
+    width: 27%;
+}
+
+.warning-cell {
+    color: #dc2626 !important;
+    font-weight: bold;
+}
+
+/* Total Row */
+.total-row {
+    font-weight: 900;
+    background: #f0f0f0;
+}
+
+.total-row td {
+    font-weight: 900;
+}
+
+/* Attendance Section */
+.attendance-section {
+    margin: 18px 0 18px 0;
+    padding: 9px 12px;
+    border: 1.5px solid #000;
+    background: #fff;
+}
+
+.attendance-row {
+    display: flex;
+    justify-content: space-around;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* Remarks Section */
+.remarks-section {
+    margin: 14px 0 14px 0;
+    font-size: 11px;
+    font-weight: bold;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.remarks-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.remarks-label {
+    white-space: nowrap;
+}
+
+.remarks-line {
+    flex: 1;
+    border-bottom: 1.5px solid #000;
+    height: 12px;
+}
+
+/* Signature Section */
+.signature-section {
+    margin-top: 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.signature-item {
+    flex: 1;
+    text-align: center;
+}
+
+.signature-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    margin-bottom: 38px;
+}
+
+.signature-line {
+    border-top: 1.5px solid #000;
+    width: 100%;
+}
+
+/* Grade Legend */
+.grade-legend {
+    margin: 14px 0 16px 0;
+    padding: 7px 12px;
+    border: 1.5px solid #000;
+    background: #fafafa;
+}
+
+.legend-title {
+    font-size: 9px;
+    font-weight: 900;
+    margin-bottom: 3px;
+}
+
+.legend-text {
+    font-size: 8.5px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.legend-subtext {
+    font-size: 8px;
+    color: #444;
+    margin-top: 3px;
+}
+
+/* Bottom Info Row */
+.bottom-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: 8px;
+    border-top: 1px solid #000;
+    padding-top: 6px;
+}
+
+.grade-info {
+    font-size: 10.5px;
+    font-weight: 900;
+    text-align: left;
+}
+
+.generated-info {
+    font-size: 8px;
+    color: #666;
+    text-align: right;
+}
+
+.page-number {
+    text-align: center;
+    font-size: 9px;
+    margin-top: 5px;
+    font-weight: bold;
+}
+
+/* Print optimization */
+@media print {
+    html, body {
+        width: 210mm;
+        margin: 0;
+        padding: 0;
+    }
+    
+    th {
+        background: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    .total-row td {
+        background: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    .page-container {
+        border: 2px solid #000;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        page-break-after: always;
+    }
+    
+    .logo-watermark {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<%
+let pageNum = 1;
+const totalStudents = students.length;
+
+students.forEach(function(student, index) {
+    const data = student;
+%>
+
+<div class="page-container">
+    
+    <!-- Logo Watermark -->
+    <div class="logo-watermark">
+        <img src="<%= schoolLogo %>" alt="Watermark">
+    </div>
+    
+    <div class="content-layer">
+        
+        <div class="main-content">
+            
+            <!-- Header -->
+            <div class="header-section">
+                <div class="school-logo">
+                    <img src="<%= schoolLogo %>" alt="School Logo">
+                </div>
+                <div class="school-name">P.P.M.H.S.S. KOTTUKKARA</div>
+                <div class="report-title">PROGRESS REPORT - <%= academicYear %></div>
+                <div class="report-title" style="font-size: 12px; margin-top: 1px;"><%= examName %></div>
+            </div>
+            
+            <!-- Student Info -->
+            <div class="student-info">
+                <div class="info-row">
+                    <span class="info-label">Name</span>
+                    <span class="info-value">: <%= data.student.name %></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Class & Division</span>
+                    <span class="info-value">: <%= data.student.class %></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Admission No.</span>
+                    <span class="info-value">: <%= data.student.admissionNo %></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Roll Number</span>
+                    <span class="info-value">: <%= data.student.rollNumber %></span>
+                </div>
+            </div>
+            
+            <!-- Marks Table -->
+            <% if (data.subjects && data.subjects.length > 0) { 
+                const hasCE = data.totalCEMax > 0;
+            %>
+            <table class="marks-table">
+                <thead>
+                    <% if (hasCE) { %>
+                    <tr>
+                        <th rowspan="2">SUBJECT</th>
+                        <th colspan="2">Max. Score</th>
+                        <th colspan="2">Score Obtained</th>
+                        <th rowspan="2">TE GRADE</th>
+                        <th rowspan="2">TOTAL</th>
+                        <th rowspan="2">TOTAL GRADE</th>
+                    </tr>
+                    <tr>
+                        <th>CE</th>
+                        <th>TE</th>
+                        <th>CE</th>
+                        <th>TE</th>
+                    </tr>
+                    <% } else { %>
+                    <tr>
+                        <th>SUBJECT</th>
+                        <th>MAX. SCORE</th>
+                        <th>SCORE OBTAINED</th>
+                        <th>TE GRADE</th>
+                        <th>TOTAL</th>
+                        <th>TOTAL GRADE</th>
+                    </tr>
+                    <% } %>
+                </thead>
+                <tbody>
+                <% 
+                data.subjects.forEach(function(subject) {
+                    const isWarn = subject.isTeWarning;
+                    const teGrade = subject.teGrade || subject.grade;
+                    const totalGrade = subject.totalGrade || subject.grade;
+                %>
+                <tr>
+                    <td><%= subject.name %></td>
+                    <% if (hasCE) { %>
+                    <td><%= subject.ceMax %></td>
+                    <td><%= subject.teMax %></td>
+                    <td><%= subject.ceMarks %></td>
+                    <td class="<%= isWarn ? 'warning-cell' : '' %>">
+                        <%= subject.teMarks %><%= isWarn ? '*' : '' %>
+                    </td>
+                    <td class="<%= isWarn ? 'warning-cell' : '' %>">
+                        <%= teGrade %><%= isWarn ? '*' : '' %>
+                    </td>
+                    <td><%= subject.total %></td>
+                    <td><%= totalGrade %></td>
+                    <% } else { %>
+                    <td><%= subject.teMax %></td>
+                    <td class="<%= isWarn ? 'warning-cell' : '' %>">
+                        <%= subject.teMarks %><%= isWarn ? '*' : '' %>
+                    </td>
+                    <td class="<%= isWarn ? 'warning-cell' : '' %>">
+                        <%= teGrade %><%= isWarn ? '*' : '' %>
+                    </td>
+                    <td><%= subject.total %></td>
+                    <td><%= totalGrade %></td>
+                    <% } %>
+                </tr>
+                <% }); %>
+                
+                <tr class="total-row">
+                    <td><strong>TOTAL</strong></td>
+                    <% if (hasCE) { %>
+                    <td><strong><%= data.totalCEMax %></strong></td>
+                    <td><strong><%= data.totalTEMax %></strong></td>
+                    <td><strong><%= data.totalCE %></strong></td>
+                    <td><strong><%= data.totalTE %></strong></td>
+                    <td><strong><%= typeof data.overallTeGrade !== 'undefined' ? data.overallTeGrade : data.overallGrade %></strong></td>
+                    <td><strong><%= data.grandTotal %></strong></td>
+                    <td><strong><%= typeof data.overallTotalGrade !== 'undefined' ? data.overallTotalGrade : data.overallGrade %><% if (typeof data.overallPercentage !== 'undefined' && data.overallPercentage !== null && data.overallPercentage !== '') { %> (<%= data.overallPercentage %>%)<% } %></strong></td>
+                    <% } else { %>
+                    <td><strong><%= data.totalTEMax %></strong></td>
+                    <td><strong><%= data.totalTE %></strong></td>
+                    <td><strong><%= typeof data.overallTeGrade !== 'undefined' ? data.overallTeGrade : data.overallGrade %></strong></td>
+                    <td><strong><%= data.grandTotal %></strong></td>
+                    <td><strong><%= typeof data.overallTotalGrade !== 'undefined' ? data.overallTotalGrade : data.overallGrade %><% if (typeof data.overallPercentage !== 'undefined' && data.overallPercentage !== null && data.overallPercentage !== '') { %> (<%= data.overallPercentage %>%)<% } %></strong></td>
+                    <% } %>
+                </tr>
+                </tbody>
+            </table>
+            <% if (data.subjects.some(s => s.isTeWarning)) { %>
+            <div style="margin-top: 4px; font-size: 8.5px; color: #dc2626; font-weight: 600;">
+                * TE score is below 30% (Needs Improvement)
+            </div>
+            <% } %>
+            <% } else { %>
+            <div style="text-align: center; padding: 20px; color: #999; font-style: italic;">
+                No marks available for this student
+            </div>
+            <% } %>
+            
+            <!-- Attendance Section -->
+            <% if (typeof data.attendance !== 'undefined' && data.attendance && data.attendance.totalDays > 0) { %>
+            <div class="attendance-section">
+                <div class="attendance-row">
+                    <span>Total Working Days: <strong><%= data.attendance.totalDays %></strong></span>
+                    <span>Days Present: <strong><%= data.attendance.presentDays %></strong></span>
+                    <span>Attendance: <strong><%= data.attendance.percentage %>%</strong></span>
+                </div>
+            </div>
+            <% } %>
+            
+            <!-- Remarks Section -->
+            <div class="remarks-section">
+                <div class="remarks-row">
+                    <span class="remarks-label">Remarks :</span>
+                    <span class="remarks-line"></span>
+                </div>
+                <div class="remarks-row">
+                    <span class="remarks-line" style="margin-left: 60px;"></span>
+                </div>
+            </div>
+            
+        </div>
+        
+        <!-- Bottom Section -->
+        <div class="bottom-section">
+            
+            <!-- Signatures -->
+            <div class="signature-section">
+                <div class="signature-item">
+                    <div class="signature-label">Class Teacher</div>
+                    <div class="signature-line"></div>
+                </div>
+                <div class="signature-item">
+                    <div class="signature-label">Headmaster</div>
+                    <div class="signature-line"></div>
+                </div>
+                <div class="signature-item">
+                    <div class="signature-label">Parent's Signature</div>
+                    <div class="signature-line"></div>
+                </div>
+            </div>
+            
+            <!-- Bottom Info Row -->
+            <div class="bottom-info-row">
+                <div class="grade-info">
+                    Overall Grade: <%= typeof data.overallTotalGrade !== 'undefined' ? data.overallTotalGrade : data.overallGrade %>
+                    <% if (typeof data.overallPercentage !== 'undefined' && data.overallPercentage !== null && data.overallPercentage !== '') { %>
+                    &nbsp;&nbsp;|&nbsp;&nbsp;Total Mark Percentage: <%= data.overallPercentage %>%
+                    <% } %>
+                </div>
+                <div class="generated-info">
+                    Generated on: <%= new Date().toLocaleDateString('en-IN') %>
+                </div>
+            </div>
+            
+        </div>
+        
+        <div class="page-number">Page <%= pageNum %> of <%= totalStudents %></div>
+    </div>
+</div>
+
+<% 
+    pageNum++;
+}); 
+%>
+
+</body>
+</html>

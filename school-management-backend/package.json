@@ -1,0 +1,59 @@
+{
+  "name": "school-management-backend",
+  "version": "2.0.1",
+  "description": "School Management System Backend with Socket.IO",
+  "main": "server.js",
+  "puppeteer": {
+    "skip_chromium_download": true
+  },
+  "scripts": {
+    "start": "NODE_ENV=production node server.js",
+    "start:render": "NODE_OPTIONS='--max-old-space-size=512' NODE_ENV=production node server.js",
+    "build": "chmod +x render-build.sh && ./render-build.sh",
+    "dev": "nodemon server.js",
+    "test": "jest",
+    "test:load": "npx artillery run tests/load/advanced-test.yml",
+    "seed": "node src/seed/index.js",
+    "seed:dev": "NODE_ENV=development node src/seed/index.js",
+    "seed:loadtest": "NODE_ENV=development node src/seed/load-seed.js",
+    "postinstall": "echo 'Postinstall completed - keeping puppeteer'"
+  },
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "bcryptjs": "^2.4.3",
+    "bullmq": "^5.78.0",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "csv-parser": "^3.0.0",
+    "dotenv": "^16.3.1",
+    "ejs": "^5.0.2",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "firebase-admin": "^13.8.0",
+    "helmet": "^7.1.0",
+    "html-pdf": "^3.0.1",
+    "ioredis": "^5.11.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.0",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "node-cache": "^5.1.2",
+    "nodemailer": "^6.9.7",
+    "phantomjs-prebuilt": "^2.1.16",
+    "puppeteer": "^24.43.0",
+    "rate-limit-redis": "^6.0.0",
+    "redis": "^4.6.12",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
+    "winston": "^3.11.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1",
+    "supertest": "^6.3.3"
+  }
+}

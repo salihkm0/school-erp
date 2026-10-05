@@ -1,0 +1,2429 @@
+const { Exam, EXAM_TYPES, SESSION_TIMES, SUBMISSION_STATUS } = require('../models/Exam');
+const Mark = require('../models/Mark');
+const ExamResult = require('../models/ExamResult');
+const Student = require('../models/Student');
+const Class = require('../models/Class');
+const Staff = require('../models/Staff');
+const StaffAssignment = require('../models/StaffAssignment');
+const AcademicYear = require('../models/AcademicYear');
+const Subject = require('../models/Subject');
+const Notification = require('../models/Notification');
+const { broadcastToClass, broadcastToUser, broadcastToRole } = require('../config/socket');
+
+// Helper: Send exam notification to class
+async function sendExamNotificationToClass(classId, examId, examName, title, message, type, data) {
+  try {
+    const students = await Student.find({ classId }).select('parentIds');
+    const parentIds = [...new Set(students.flatMap(s => s.parentIds))];
+    
+    const classItem = await Class.findById(classId).select('classTeacherId');
+    if (classItem?.classTeacherId) {
+      parentIds.push(classItem.classTeacherId);
+    }
+    
+    for (const userId of parentIds) {
+      const notification = await Notification.create({
+        userId,
+        title,
+        message,
+        type,
+        data: { ...data, examId, examName, classId }
+      });
+      
+      broadcastToUser(userId.toString(), 'notification', {
+        id: notification._id,
+        title,
+        message,
+        type,
+        data: notification.data,
+        timestamp: notification.createdAt,
+        read: false
+      });
+    }
+  } catch (error) {
+    console.error('Error sending exam notification:', error);
+  }
+}
+
+// Helper: Format exam response
+async function formatExamResponse(exam) {
+  const examObj = exam.toObject();
+  
+  if (examObj.classIds && examObj.classIds.length > 0 && !examObj.classIds[0].name) {
+    const classes = await Class.find({ _id: { $in: examObj.classIds } }).select('name section displayName');
+    examObj.classes = classes;
+  }
+  
+  if (examObj.schedule && examObj.schedule.length > 0) {
+    examObj.schedule = examObj.schedule.map(s => ({
+      ...s,
+      sessionLabel: {
+        BF: 'Before Noon (9:00 AM - 12:00 PM)',
+        AF: 'After Noon (2:00 PM - 5:00 PM)',
+        FULL: 'Full Day (9:00 AM - 5:00 PM)'
+      }[s.session] || s.session,
+      hasPractical: (s.practicalMarks || 0) > 0,
+      hasCE: s.ceEnabled || false,
+      ceComponents: s.ceComponents || []
+    }));
+  }
+  
+  return examObj;
+}
+
+// Helper function: Auto-populate subjects from classes
+async function autoPopulateSubjectsFromClasses(classIds, providedSchedule = null) {
+  const classes = await Class.find({ _id: { $in: classIds } })
+    .populate('subjects', 'name code type department');
+  
+  const subjectMap = new Map();
+  
+  classes.forEach(cls => {
+    cls.subjects.forEach(subject => {
+      const subjectId = subject._id.toString();
+      
+      if (!subjectMap.has(subjectId)) {
+        const isLanguage = subject.department === 'Languages';
+        
+        subjectMap.set(subjectId, {
+          subjectId: subject._id,
+          subjectName: subject.name,
+          subjectCode: subject.code,
+          termMaxMarks: isLanguage ? 50 : 80,
+          termPassingMarks: isLanguage ? 20 : 32,
+          theoryMaxMarks: isLanguage ? 50 : 80,
+          practicalMaxMarks: 0,
+          ceEnabled: false,
+          ceMaxMarks: 0,
+          cePassingMarks: 0,
+          ceComponents: [],
+          termWeightage: 80,
+          ceWeightage: 20,
+          isLanguageSubject: isLanguage,
+          hasPractical: false,
+          totalMaxMarks: isLanguage ? 50 : 80,
+          totalPassingMarks: isLanguage ? 20 : 32
+        });
+      }
+    });
+  });
+  
+  // Override with provided schedule if available
+  if (providedSchedule && providedSchedule.length > 0) {
+    providedSchedule.forEach(s => {
+      const subjectId = s.subjectId.toString();
+      if (subjectMap.has(subjectId)) {
+        const subject = subjectMap.get(subjectId);
+        subject.termMaxMarks = s.termMaxMarks || s.maxMarks || subject.termMaxMarks;
+        subject.termPassingMarks = s.termPassingMarks || s.passingMarks || subject.termPassingMarks;
+        subject.theoryMaxMarks = s.theoryMarks || subject.theoryMaxMarks;
+        subject.practicalMaxMarks = s.practicalMarks || subject.practicalMaxMarks;
+        subject.ceEnabled = s.ceEnabled || false;
+        subject.ceMaxMarks = s.ceMaxMarks || 0;
+        subject.cePassingMarks = s.cePassingMarks || 0;
+        subject.ceComponents = s.ceComponents || [];
+        subject.hasPractical = (s.practicalMarks || 0) > 0;
+        subject.totalMaxMarks = (subject.termMaxMarks || 0) + (subject.ceMaxMarks || 0);
+        subject.totalPassingMarks = (subject.termPassingMarks || 0) + (subject.cePassingMarks || 0);
+      }
+    });
+  }
+  
+  return Array.from(subjectMap.values());
+}
+
+// Helper to build schedule with full subject details
+async function buildScheduleWithSubjects(schedule, classIds) {
+  const enrichedSchedule = [];
+  const subjectMap = new Map();
+  
+  const classes = await Class.find({ _id: { $in: classIds } })
+    .populate('subjects', 'name code type department');
+  
+  classes.forEach(cls => {
+    cls.subjects.forEach(subject => {
+      subjectMap.set(subject._id.toString(), subject);
+    });
+  });
+  
+  for (const s of schedule) {
+    let subject = subjectMap.get(s.subjectId.toString());
+    
+    if (!subject) {
+      subject = await Subject.findById(s.subjectId);
+    }
+    
+    const isLanguage = subject?.department === 'Languages';
+    const hasPractical = (s.practicalMarks || 0) > 0;
+    const ceEnabled = s.ceEnabled || false;
+    
+    enrichedSchedule.push({
+      subjectId: s.subjectId,
+      subjectName: subject?.name || s.subjectName,
+      subjectCode: subject?.code || s.subjectCode,
+      examDate: new Date(s.examDate),
+      session: s.session || 'BF',
+      startTime: s.startTime || '09:00 AM',
+      endTime: s.endTime || '12:00 PM',
+      duration: s.duration || (s.session === 'FULL' ? 480 : 180),
+      termMaxMarks: s.termMaxMarks || s.maxMarks || (isLanguage ? 50 : 80),
+      termPassingMarks: s.termPassingMarks || s.passingMarks || (isLanguage ? 20 : 32),
+      theoryMarks: s.theoryMarks || s.termMaxMarks || s.maxMarks || (isLanguage ? 50 : 80),
+      practicalMarks: s.practicalMarks || 0,
+      hasPractical: hasPractical,
+      ceEnabled: ceEnabled,
+      ceMaxMarks: s.ceMaxMarks || 0,
+      cePassingMarks: s.cePassingMarks || 0,
+      roomNumber: s.roomNumber,
+      building: s.building,
+      invigilators: s.invigilators || [],
+      invigilatorNames: s.invigilatorNames || [],
+      notes: s.notes,
+      isAbsentAllowed: s.isAbsentAllowed !== false,
+      graceTime: s.graceTime || 0
+    });
+  }
+  
+  return enrichedSchedule;
+}
+
+// Helper: Get class names for status
+async function getClassNamesForStatus(classIds) {
+  const classes = await Class.find({ _id: { $in: classIds } }).select('name section displayName');
+  const classMap = new Map();
+  classes.forEach(c => {
+    classMap.set(c._id.toString(), c.displayName || (c.section ? `${c.name}-${c.section}` : c.name));
+  });
+  return classMap;
+}
+
+// ==================== API ENDPOINTS ====================
+
+// Get all exams with filtering
+exports.getExams = async (req, res) => {
+  try {
+    const { 
+      classId, 
+      academicYearId, 
+      academicYear, 
+      examType, 
+      term, 
+      overallStatus,
+      isActive, 
+      page = 1, 
+      limit = 20 
+    } = req.query;
+    
+    const query = { isActive: true };
+    if (classId) query.classIds = classId;
+    if (academicYearId) query.academicYearId = academicYearId;
+    if (academicYear) query.academicYear = academicYear;
+    if (examType) query.examType = examType;
+    if (term) query.term = term;
+    if (isActive !== undefined) query.isActive = isActive === 'true';
+
+    // Apply staff visibility filtering
+    if (req.user.role === 'staff') {
+      const staff = await Staff.findOne({ userId: req.user.id });
+      let staffOrConditions = [{ createdBy: req.user.id }];
+      
+      if (staff) {
+        const staffAssignment = await StaffAssignment.findOne({ staffId: staff._id });
+        if (staffAssignment) {
+          if (staffAssignment.classTeacherOf) {
+            staffOrConditions.push({ classIds: staffAssignment.classTeacherOf });
+          }
+          if (staffAssignment.subjectsTaught && staffAssignment.subjectsTaught.length > 0) {
+            staffAssignment.subjectsTaught.forEach(ta => {
+              if (ta.classId && ta.subjectId) {
+                staffOrConditions.push({
+                  classIds: ta.classId,
+                  'subjects.subjectId': ta.subjectId
+                });
+              }
+            });
+          }
+        }
+      }
+      
+      if (staffOrConditions.length > 1) {
+        query.$or = staffOrConditions;
+      } else {
+        query.createdBy = req.user.id;
+      }
+    }
+
+    const exams = await Exam.find(query)
+      .populate('classIds', 'name section displayName')
+      .populate('academicYearId', 'year name')
+      .populate('subjects.subjectId', 'name code')
+      .populate('createdBy', 'name')
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .sort({ createdAt: -1 });
+
+    const total = await Exam.countDocuments(query);
+    
+    // Enhance exams with schedule details
+    const formattedExams = await Promise.all(exams.map(async (exam) => {
+      const examObj = await formatExamResponse(exam);
+      
+      // Add summary stats
+      const totalStudents = await Student.countDocuments({
+        classId: { $in: exam.classIds },
+        status: 'active'
+      });
+      
+      return {
+        ...examObj,
+        summary: {
+          totalClasses: exam.classIds.length,
+          totalSubjects: exam.subjects.length,
+          totalStudents,
+          hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+          hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled)
+        }
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: formattedExams,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Error in getExams:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exam by ID with full details
+exports.getExam = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id)
+      .populate('academicYearId', 'name year startDate endDate')
+      .populate('classIds', 'name section displayName')
+      .populate('subjects.subjectId', 'name code type department creditHours')
+      .populate('schedule.subjectId', 'name code')
+      .populate('schedule.invigilators', 'name staffCode')
+      .populate('classSubmissionStatus.submittedBy', 'name')
+      .populate('classSubmissionStatus.reviewedBy', 'name')
+      .populate('createdBy', 'name email');
+
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+    
+    // Update submission stats for each class
+    for (const classStatus of exam.classSubmissionStatus) {
+      await exam.updateClassSubmissionStats(classStatus.classId);
+    }
+    
+    // Fetch all marksheets for this exam to build subject submission status map
+    const allExamMarksheets = await Mark.find({ examId: exam._id });
+    const marksheetsByClassMap = new Map();
+    allExamMarksheets.forEach((m) => {
+      const cId = m.classId?.toString();
+      if (!marksheetsByClassMap.has(cId)) marksheetsByClassMap.set(cId, []);
+      marksheetsByClassMap.get(cId).push(m);
+    });
+
+    // Fetch active student count per class for mark entry verification
+    const activeStudentCounts = await Student.aggregate([
+      { $match: { classId: { $in: exam.classIds }, status: 'active' } },
+      { $group: { _id: '$classId', count: { $sum: 1 } } }
+    ]);
+    const studentCountMap = new Map();
+    activeStudentCounts.forEach(sc => {
+      if (sc._id) studentCountMap.set(sc._id.toString(), sc.count);
+    });
+
+    const enhancedClassSubmissionStatus = (exam.classSubmissionStatus || []).map((cs) => {
+      const csObj = cs.toObject ? cs.toObject() : cs;
+      const cId = (cs.classId?._id || cs.classId || "").toString();
+      const classMarksheets = marksheetsByClassMap.get(cId) || [];
+      const studentCount = studentCountMap.get(cId) || cs.totalStudents || 0;
+
+      const subjectSubmissions = (exam.subjects || []).map((subj) => {
+        const examSubjIdStr = subj._id?.toString();
+        const actualSubjIdStr = (subj.subjectId?._id || subj.subjectId)?.toString();
+
+        const enteredStudents = classMarksheets.filter((m) => {
+          const s = (m.subjects || []).find((sub) => {
+            const sSubjId = sub.subjectId?.toString();
+            const sExamSubjId = sub.examSubjectId?.toString();
+            return (
+              (sSubjId && (sSubjId === actualSubjIdStr || sSubjId === examSubjIdStr)) ||
+              (sExamSubjId && (sExamSubjId === examSubjIdStr || sExamSubjId === actualSubjIdStr)) ||
+              (sub.subjectName === subj.subjectName) ||
+              (sub.subjectName && subj.subjectName && sub.subjectName.trim().toLowerCase() === subj.subjectName.trim().toLowerCase())
+            );
+          });
+          return Boolean(
+            s && (
+              s.status === "submitted" ||
+              s.status === "reviewed" ||
+              s.status === "published" ||
+              s.isAbsent === true ||
+              s.isEnteredExplicitly === true ||
+              (s.isEntered === true && (
+                (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+                (s.ceScore != null && Number(s.ceScore) > 0) ||
+                s.isAbsent === true ||
+                s.isEnteredExplicitly === true
+              )) ||
+              (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+              (s.ceScore != null && Number(s.ceScore) > 0)
+            )
+          );
+        }).length;
+
+        const isAllMarksEntered = studentCount > 0 && enteredStudents >= studentCount;
+        const markEntryPercentage = studentCount > 0 ? Math.round((enteredStudents / studentCount) * 100) : 0;
+
+        const matchingSubjects = classMarksheets
+          .flatMap((m) => m.subjects || [])
+          .filter((s) => {
+            const sSubjId = s.subjectId?.toString();
+            const sExamSubjId = s.examSubjectId?.toString();
+            return (
+              (sSubjId && (sSubjId === actualSubjIdStr || sSubjId === examSubjIdStr)) ||
+              (sExamSubjId && (sExamSubjId === examSubjIdStr || sExamSubjId === actualSubjIdStr)) ||
+              (s.subjectName && subj.subjectName && s.subjectName.trim().toLowerCase() === subj.subjectName.trim().toLowerCase())
+            );
+          });
+
+        const allSubmitted = matchingSubjects.length > 0 && matchingSubjects.every(
+          (s) => s.status === "submitted" || s.status === "reviewed" || s.status === "published"
+        );
+        const sampleSubmittedSubj = matchingSubjects.find(
+          (s) => s.status === "submitted" || s.status === "reviewed" || s.status === "published"
+        );
+
+        let subjectStatus = "draft";
+        if (allSubmitted) {
+          subjectStatus = matchingSubjects.every((s) => s.status === "reviewed")
+            ? "reviewed"
+            : matchingSubjects.every((s) => s.status === "published")
+            ? "published"
+            : "submitted";
+        }
+
+        return {
+          subjectId: examSubjIdStr || actualSubjIdStr,
+          subjectName: subj.subjectName,
+          subjectCode: subj.subjectCode,
+          status: subjectStatus,
+          submittedByName: subjectStatus !== "draft" ? (sampleSubmittedSubj?.submittedByName || null) : null,
+          submittedAt: subjectStatus !== "draft" ? (sampleSubmittedSubj?.submittedAt || null) : null,
+          enteredMarks: enteredStudents,
+          expectedMarks: studentCount,
+          isAllMarksEntered,
+          markEntryPercentage
+        };
+      });
+
+      const totalClassExpected = subjectSubmissions.reduce((sum, s) => sum + s.expectedMarks, 0);
+      const totalClassEntered = subjectSubmissions.reduce((sum, s) => sum + s.enteredMarks, 0);
+      const isClassAllMarksEntered = subjectSubmissions.length > 0 && subjectSubmissions.every(s => s.isAllMarksEntered);
+      const classMarkEntryPercentage = totalClassExpected > 0 ? Math.round((totalClassEntered / totalClassExpected) * 100) : 0;
+
+      return {
+        ...csObj,
+        totalStudents: studentCount,
+        subjectSubmissions,
+        enteredMarks: totalClassEntered,
+        expectedMarks: totalClassExpected,
+        isAllMarksEntered: isClassAllMarksEntered,
+        markEntryPercentage: classMarkEntryPercentage
+      };
+    });
+
+    // Get class details with student counts
+    const classDetails = await Promise.all(exam.classIds.map(async (classItem) => {
+      const studentCount = await Student.countDocuments({ 
+        classId: classItem._id, 
+        status: 'active' 
+      });
+      
+      const submissionStatus = enhancedClassSubmissionStatus.find(
+        cs => cs.classId && cs.classId.toString() === classItem._id.toString()
+      );
+      
+      const marksEntered = await Mark.countDocuments({
+        examId: exam._id,
+        classId: classItem._id
+      });
+      
+      const totalExpectedMarks = studentCount * exam.subjects.length;
+      
+      return {
+        classId: classItem._id,
+        className: classItem.name,
+        section: classItem.section,
+        displayName: classItem.displayName || (classItem.section ? `${classItem.name}-${classItem.section}` : classItem.name),
+        studentCount,
+        status: submissionStatus?.status || 'draft',
+        submissionStatus: submissionStatus,
+        subjectSubmissions: submissionStatus?.subjectSubmissions || [],
+        marksEntryStats: {
+          totalStudents: studentCount,
+          marksEntered,
+          marksPending: totalExpectedMarks - marksEntered,
+          completionPercentage: totalExpectedMarks > 0 ? (marksEntered / totalExpectedMarks) * 100 : 0
+        }
+      };
+    }));
+    
+    // Enhance schedule with detailed information
+    const enhancedSchedule = exam.schedule.map(schedule => ({
+      ...schedule.toObject(),
+      sessionLabel: {
+        BF: 'Before Noon (9:00 AM - 12:00 PM)',
+        AF: 'After Noon (2:00 PM - 5:00 PM)',
+        FULL: 'Full Day (9:00 AM - 5:00 PM)'
+      }[schedule.session],
+      hasPractical: (schedule.practicalMarks || 0) > 0,
+      practicalMarks: schedule.practicalMarks || 0,
+      theoryMarks: schedule.theoryMarks || schedule.termMaxMarks || 0,
+      hasCE: schedule.ceEnabled || false,
+      ceMaxMarks: schedule.ceMaxMarks || 0,
+      cePassingMarks: schedule.cePassingMarks || 0,
+      totalMaxMarks: (schedule.termMaxMarks || 0) + (schedule.ceMaxMarks || 0),
+      totalPassingMarks: (schedule.termPassingMarks || 0) + (schedule.cePassingMarks || 0)
+    }));
+    
+    // Enhance subjects with schedule info
+    const enhancedSubjects = exam.subjects.map(subject => {
+      const subjectIdStr = subject.subjectId?._id?.toString() || subject.subjectId?.toString();
+      const scheduleInfo = exam.schedule.find(s => {
+        const sSubjectIdStr = s.subjectId?._id?.toString() || s.subjectId?.toString();
+        return subjectIdStr && sSubjectIdStr && subjectIdStr === sSubjectIdStr;
+      });
+      return {
+        ...subject.toObject(),
+        schedule: scheduleInfo ? {
+          examDate: scheduleInfo.examDate,
+          session: scheduleInfo.session,
+          sessionLabel: {
+            BF: 'Before Noon (9:00 AM - 12:00 PM)',
+            AF: 'After Noon (2:00 PM - 5:00 PM)',
+            FULL: 'Full Day (9:00 AM - 5:00 PM)'
+          }[scheduleInfo.session],
+          duration: scheduleInfo.duration,
+          roomNumber: scheduleInfo.roomNumber,
+          building: scheduleInfo.building
+        } : null,
+        hasPractical: (subject.practicalMaxMarks || 0) > 0,
+        hasCE: subject.ceEnabled || false
+      };
+    });
+    
+    const formattedExam = await formatExamResponse(exam);
+    
+    res.json({
+      success: true,
+      data: {
+        ...formattedExam,
+        classSubmissionStatus: enhancedClassSubmissionStatus,
+        classDetails,
+        enhancedSchedule,
+        enhancedSubjects,
+        summary: {
+          totalClasses: exam.classIds.length,
+          totalSubjects: exam.subjects.length,
+          totalMarks: exam.totalMaxMarks,
+          hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+          hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled),
+          totalStudents: classDetails.reduce((sum, c) => sum + c.studentCount, 0),
+          classesSubmitted: exam.classSubmissionStatus.filter(cs => cs.status === 'submitted' || cs.status === 'reviewed').length,
+          classesReviewed: exam.classSubmissionStatus.filter(cs => cs.status === 'reviewed').length,
+          overallCompletion: classDetails.length > 0 
+            ? classDetails.reduce((sum, c) => sum + (c.marksEntryStats?.completionPercentage || 0), 0) / classDetails.length 
+            : 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getExam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Create new exam - COMPLETE VERSION with subject-level CE
+exports.createExam = async (req, res) => {
+  try {
+    const {
+      name,
+      examType,
+      description,
+      academicYearId,
+      term,
+      classIds,
+      subjects,
+      schedule,
+      schedulingMode,
+      startDate,
+      endDate,
+      settings,
+      globalCeConfig,
+      termEntryDeadline,
+      resultDeclarationDate
+    } = req.body;
+
+    // Validate academic year
+    const academicYear = await AcademicYear.findById(academicYearId);
+    if (!academicYear) {
+      return res.status(404).json({ message: 'Academic year not found' });
+    }
+
+    // Validate schedule for subject-wise scheduling
+    if (schedulingMode === 'subject_schedule' || !schedulingMode) {
+      if (!schedule || schedule.length === 0) {
+        return res.status(400).json({ message: 'Schedule is required for subject-wise scheduling' });
+      }
+    }
+
+    // Prepare exam data
+    const examData = {
+      name: examType === 'custom' ? name : `${examType}_exam`,
+      examType,
+      description,
+      academicYearId,
+      academicYear: academicYear.year,
+      term,
+      classIds,
+      schedulingMode: schedulingMode || 'subject_schedule',
+      settings: settings || {},
+      createdBy: req.user.id,
+      termEntryDeadline: termEntryDeadline ? new Date(termEntryDeadline) : null,
+      resultDeclarationDate: resultDeclarationDate ? new Date(resultDeclarationDate) : null,
+      globalCeConfig: globalCeConfig || { enabled: false }
+    };
+
+    // Handle date range scheduling
+    if (schedulingMode === 'date_range') {
+      examData.startDate = new Date(startDate);
+      examData.endDate = new Date(endDate);
+      
+      // Auto-populate subjects from classes
+      if (!subjects || subjects.length === 0) {
+        examData.subjects = await autoPopulateSubjectsFromClasses(classIds);
+      } else {
+        examData.subjects = subjects;
+      }
+      examData.schedule = [];
+    } 
+    // Handle subject-wise scheduling with subject-level CE
+    else {
+      const enrichedSchedule = [];
+      
+      for (const s of schedule) {
+        // Get subject details if not provided
+        let subject = null;
+        if (!s.subjectName) {
+          subject = await Subject.findById(s.subjectId);
+        }
+        
+        // Parse marks
+        const maxMarks = parseInt(s.maxMarks) || 100;
+        const passingMarks = parseInt(s.passingMarks) || Math.floor(maxMarks * 0.4);
+        const practicalMarks = parseInt(s.practicalMarks) || 0;
+        const theoryMarks = maxMarks - practicalMarks;
+        
+        // Validate exam date
+        let examDate = new Date(s.examDate);
+        if (isNaN(examDate.getTime())) {
+          return res.status(400).json({ 
+            message: `Invalid exam date for subject ${subject?.name || s.subjectName}` 
+          });
+        }
+        
+        // Subject-level CE configuration (PER SUBJECT)
+        const ceEnabled = s.ceEnabled || false;
+        const ceMaxMarks = ceEnabled ? (parseInt(s.ceMaxMarks) || 20) : 0;
+        const cePassingMarks = ceEnabled ? (parseInt(s.cePassingMarks) || 8) : 0;
+        
+        // CE Components for this specific subject
+        const ceComponents = (s.ceComponents || [])
+          .filter(c => c.name && c.name.trim())
+          .map(comp => ({
+            name: comp.name,
+            maxMarks: parseInt(comp.maxMarks) || 0,
+            weightage: parseInt(comp.weightage) || 0
+          }));
+        
+        const scheduleItem = {
+          // Basic subject info
+          subjectId: s.subjectId,
+          subjectName: subject?.name || s.subjectName,
+          subjectCode: subject?.code || s.subjectCode,
+          
+          // Schedule details
+          examDate: examDate,
+          session: s.session || 'BF',
+          startTime: s.startTime || (s.session === 'BF' ? '09:00 AM' : s.session === 'AF' ? '02:00 PM' : '09:00 AM'),
+          endTime: s.endTime || (s.session === 'BF' ? '12:00 PM' : s.session === 'AF' ? '05:00 PM' : '05:00 PM'),
+          duration: s.duration || (s.session === 'FULL' ? 480 : 180),
+          
+          // Term marks configuration
+          maxMarks: maxMarks,
+          passingMarks: passingMarks,
+          theoryMarks: theoryMarks,
+          practicalMarks: practicalMarks,
+          hasPractical: practicalMarks > 0,
+          termMaxMarks: maxMarks,
+          termPassingMarks: passingMarks,
+          termWeightage: 80,
+          
+          // Subject-level CE configuration
+          ceEnabled: ceEnabled,
+          ceMaxMarks: ceMaxMarks,
+          cePassingMarks: cePassingMarks,
+          ceComponents: ceComponents,
+          ceWeightage: 20,
+          
+          // Logistics
+          roomNumber: s.roomNumber || '',
+          building: s.building || '',
+          invigilators: s.invigilators || [],
+          invigilatorNames: s.invigilatorNames || [],
+          notes: s.notes || '',
+          isAbsentAllowed: s.isAbsentAllowed !== false,
+          graceTime: s.graceTime || 0
+        };
+        
+        enrichedSchedule.push(scheduleItem);
+      }
+      
+      examData.schedule = enrichedSchedule;
+      
+      // Calculate exam date range from schedule
+      const dates = enrichedSchedule.map(s => new Date(s.examDate));
+      examData.startDate = new Date(Math.min(...dates));
+      examData.endDate = new Date(Math.max(...dates));
+      
+      // Build subjects array from schedule with subject-level CE
+      const subjectMap = new Map();
+      for (const s of enrichedSchedule) {
+        const subjectKey = s.subjectId.toString();
+        if (!subjectMap.has(subjectKey)) {
+          const isLanguage = s.subjectCode && ['MAL', 'ENG', 'HIN', 'ARB', 'URD'].includes(s.subjectCode);
+          
+          subjectMap.set(subjectKey, {
+            subjectId: s.subjectId,
+            subjectName: s.subjectName,
+            subjectCode: s.subjectCode,
+            termMaxMarks: s.maxMarks,
+            termPassingMarks: s.passingMarks,
+            theoryMaxMarks: s.theoryMarks,
+            practicalMaxMarks: s.practicalMarks,
+            hasPractical: s.practicalMarks > 0,
+            // Subject-level CE
+            ceEnabled: s.ceEnabled,
+            ceMaxMarks: s.ceMaxMarks,
+            cePassingMarks: s.cePassingMarks,
+            ceComponents: s.ceComponents || [],
+            totalMaxMarks: (s.maxMarks || 0) + (s.ceMaxMarks || 0),
+            totalPassingMarks: (s.passingMarks || 0) + (s.cePassingMarks || 0),
+            weightage: 100,
+            termWeightage: 80,
+            ceWeightage: 20,
+            isLanguageSubject: isLanguage
+          });
+        }
+      }
+      examData.subjects = Array.from(subjectMap.values());
+    }
+
+    // Build class submission status
+    const classNamesMap = await getClassNamesForStatus(classIds);
+    examData.classSubmissionStatus = await Promise.all(classIds.map(async (classId) => {
+      const totalStudents = await Student.countDocuments({ classId, status: { $in: ['active', 'inactive'] } });
+      const totalSubjects = examData.subjects.length;
+      
+      return {
+        classId,
+        className: classNamesMap.get(classId.toString()) || 'Unknown',
+        classDisplayName: classNamesMap.get(classId.toString()) || 'Unknown',
+        status: 'draft',
+        totalStudents: totalStudents,
+        marksEntryStats: {
+          totalStudents: totalStudents,
+          termMarksEntered: 0,
+          ceMarksEntered: 0,
+          marksPending: totalStudents * totalSubjects,
+          completionPercentage: 0
+        }
+      };
+    }));
+
+    // Create the exam
+    const exam = await Exam.create(examData);
+
+    // Populate references for response
+    const populatedExam = await Exam.findById(exam._id)
+      .populate('classIds', 'name section displayName')
+      .populate('academicYearId', 'year name')
+      .populate('subjects.subjectId', 'name code type department')
+      .populate('schedule.subjectId', 'name code')
+      .populate('createdBy', 'name email');
+
+    // Send notifications to classes
+    for (const classId of exam.classIds) {
+      const classItem = await Class.findById(classId);
+      if (classItem) {
+        let message = '';
+        if (schedulingMode === 'date_range') {
+          message = `${exam.displayName} has been scheduled from ${new Date(exam.startDate).toLocaleDateString()} to ${new Date(exam.endDate).toLocaleDateString()}.`;
+        } else {
+          const subjectCount = exam.schedule.length;
+          const practicalCount = exam.schedule.filter(s => s.practicalMarks > 0).length;
+          const ceEnabledCount = exam.schedule.filter(s => s.ceEnabled).length;
+          message = `${exam.displayName} has been scheduled with ${subjectCount} subjects.`;
+          if (practicalCount > 0) message += ` Includes ${practicalCount} practical exams.`;
+          if (ceEnabledCount > 0) message += ` ${ceEnabledCount} subjects have CE components.`;
+        }
+        
+        await sendExamNotificationToClass(
+          classId,
+          exam._id,
+          exam.displayName,
+          `📚 New Exam: ${exam.displayName}`,
+          message,
+          'exam',
+          { 
+            startDate: exam.startDate, 
+            endDate: exam.endDate, 
+            term: exam.term,
+            schedulingMode,
+            subjectCount: exam.subjects.length,
+            hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+            hasCE: exam.schedule.some(s => s.ceEnabled)
+          }
+        );
+        
+        broadcastToClass(classId, 'exam:created', {
+          examId: exam._id,
+          examName: exam.displayName,
+          startDate: exam.startDate,
+          endDate: exam.endDate,
+          schedulingMode,
+          subjectCount: exam.subjects.length,
+          classId: classId,
+          className: classItem.name
+        });
+      }
+    }
+
+    // Broadcast to admin
+    broadcastToRole('admin', 'exam:created', {
+      examId: exam._id,
+      examName: exam.displayName,
+      examType: exam.examType,
+      classCount: exam.classIds.length,
+      subjectCount: exam.subjects.length,
+      hasCE: exam.schedule.some(s => s.ceEnabled),
+      hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+      timestamp: new Date()
+    });
+
+    // Format response
+    const formattedExam = await formatExamResponse(populatedExam);
+    
+    // Add schedule with CE details
+    const scheduleWithDetails = exam.schedule.map(s => ({
+      ...s.toObject(),
+      hasPractical: s.practicalMarks > 0,
+      hasCE: s.ceEnabled,
+      practicalMarks: s.practicalMarks,
+      ceMaxMarks: s.ceMaxMarks,
+      ceComponents: s.ceComponents || []
+    }));
+    
+    const response = {
+      ...formattedExam,
+      schedule: scheduleWithDetails,
+      summary: {
+        totalClasses: exam.classIds.length,
+        totalSubjects: exam.subjects.length,
+        languageSubjects: exam.subjects.filter(s => s.isLanguageSubject).length,
+        coreSubjects: exam.subjects.filter(s => !s.isLanguageSubject).length,
+        hasCE: exam.schedule.some(s => s.ceEnabled),
+        hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+        ceTotalMarks: exam.subjects.reduce((sum, s) => sum + (s.ceMaxMarks || 0), 0),
+        termTotalMarks: exam.subjects.reduce((sum, s) => sum + (s.termMaxMarks || 0), 0),
+        grandTotalMarks: exam.subjects.reduce((sum, s) => sum + (s.totalMaxMarks || 0), 0),
+        subjectsWithCE: exam.subjects.filter(s => s.ceEnabled).length
+      }
+    };
+
+    res.status(201).json(response);
+    
+  } catch (error) {
+    console.error('Error creating exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update exam
+exports.updateExam = async (req, res) => {
+  try {
+    const oldExam = await Exam.findById(req.params.id);
+    if (!oldExam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    // Access control: Only admin or the creator can edit
+    if (req.user.role !== 'admin' && oldExam.createdBy.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Only the creator of the exam or an admin can modify it' });
+    }
+
+    const hasMarks = await Mark.exists({ examId: req.params.id });
+    if (hasMarks && (req.body.subjects || req.body.schedule)) {
+      return res.status(400).json({ 
+        message: 'Cannot modify subjects or schedule after marks have been entered' 
+      });
+    }
+
+    const exam = await Exam.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
+    const datesChanged = oldExam.startDate?.getTime() !== exam.startDate?.getTime() || 
+                         oldExam.endDate?.getTime() !== exam.endDate?.getTime();
+    
+    if (datesChanged && !hasMarks) {
+      for (const classId of exam.classIds) {
+        await sendExamNotificationToClass(
+          classId,
+          exam._id,
+          exam.displayName,
+          `📅 Exam Schedule Updated: ${exam.displayName}`,
+          `The schedule for ${exam.displayName} has been updated.`,
+          'warning',
+          { startDate: exam.startDate, endDate: exam.endDate }
+        );
+      }
+    }
+
+    res.json(await formatExamResponse(exam));
+  } catch (error) {
+    console.error('Error updating exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete exam
+exports.deleteExam = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id);
+    
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    // Access control: Only admin or the creator can delete
+    if (req.user.role !== 'admin' && exam.createdBy.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Only the creator of the exam or an admin can delete it' });
+    }
+
+    const hasMarks = await Mark.exists({ examId: req.params.id });
+    if (hasMarks) {
+      return res.status(400).json({ 
+        message: 'Cannot delete exam after marks have been entered. Please archive it instead.' 
+      });
+    }
+
+    for (const classId of exam.classIds) {
+      await sendExamNotificationToClass(
+        classId,
+        exam._id,
+        exam.displayName,
+        `❌ Exam Cancelled: ${exam.displayName}`,
+        `${exam.displayName} has been cancelled.`,
+        'error',
+        { cancelled: true }
+      );
+      
+      broadcastToClass(classId, 'exam:cancelled', {
+        examId: exam._id,
+        examName: exam.displayName
+      });
+    }
+
+    await exam.deleteOne();
+    res.json({ message: 'Exam deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exam types
+exports.getExamTypes = async (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      predefined: [
+        { value: 'unit_test_1', label: 'Unit Test 1' },
+        { value: 'unit_test_2', label: 'Unit Test 2' },
+        { value: 'first_mid_term', label: 'First mid term examination' },
+        { value: 'first_term', label: 'First term Examination' },
+        { value: 'second_mid_term', label: 'Second mid term examination' },
+        { value: 'second_term', label: 'Second term examination' },
+        { value: 'model', label: 'Model examination' },
+        { value: 'annual', label: 'Annual examination' }
+      ],
+      custom: { value: 'custom', label: 'Custom Exam' }
+    }
+  });
+};
+
+// Get session times
+exports.getSessionTimes = async (req, res) => {
+  const sessions = {
+    BF: { value: 'BF', label: 'Before Noon', timeRange: '9:00 AM - 12:00 PM', duration: 180 },
+    AF: { value: 'AF', label: 'After Noon', timeRange: '2:00 PM - 5:00 PM', duration: 180 },
+    FULL: { value: 'FULL', label: 'Full Day', timeRange: '9:00 AM - 5:00 PM', duration: 480 }
+  };
+  
+  res.json({
+    success: true,
+    data: sessions
+  });
+};
+
+// Get exam schedule for a class
+exports.getExamSchedule = async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { academicYearId } = req.query;
+    
+    const query = { classIds: classId, isActive: true };
+    if (academicYearId) query.academicYearId = academicYearId;
+    
+    const exams = await Exam.find(query)
+      .populate('schedule.subjectId', 'name code')
+      .sort({ startDate: 1 });
+    
+    const schedule = exams.map(exam => ({
+      examId: exam._id,
+      examName: exam.displayName,
+      examType: exam.examType,
+      startDate: exam.startDate,
+      endDate: exam.endDate,
+      schedulingMode: exam.schedulingMode,
+      hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled),
+      subjects: exam.schedulingMode === 'subject_schedule' 
+        ? exam.schedule.map(s => ({
+            subjectId: s.subjectId,
+            subjectName: s.subjectName,
+            subjectCode: s.subjectCode,
+            examDate: s.examDate,
+            session: s.session,
+            sessionLabel: {
+              BF: 'Before Noon (9:00 AM - 12:00 PM)',
+              AF: 'After Noon (2:00 PM - 5:00 PM)',
+              FULL: 'Full Day (9:00 AM - 5:00 PM)'
+            }[s.session],
+            startTime: s.startTime,
+            endTime: s.endTime,
+            duration: s.duration,
+            maxMarks: s.termMaxMarks,
+            passingMarks: s.termPassingMarks,
+            theoryMarks: s.theoryMarks,
+            practicalMarks: s.practicalMarks,
+            hasPractical: (s.practicalMarks || 0) > 0,
+            hasCE: s.ceEnabled || false,
+            ceMaxMarks: s.ceMaxMarks,
+            roomNumber: s.roomNumber,
+            building: s.building
+          }))
+        : exam.subjects.map(s => ({
+            subjectId: s.subjectId,
+            subjectName: s.subjectName,
+            subjectCode: s.subjectCode,
+            maxMarks: s.termMaxMarks,
+            passingMarks: s.termPassingMarks,
+            theoryMarks: s.theoryMaxMarks,
+            practicalMarks: s.practicalMaxMarks,
+            hasPractical: (s.practicalMaxMarks || 0) > 0,
+            hasCE: s.ceEnabled || false
+          }))
+    }));
+    
+    res.json({ success: true, data: schedule });
+  } catch (error) {
+    console.error('Error in getExamSchedule:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get marks entry summary for admin
+exports.getMarksEntrySummary = async (req, res) => {
+  try {
+    const { examId } = req.params;
+    
+    console.log('Fetching marks summary for examId:', examId);
+    
+    const exam = await Exam.findById(examId)
+      .populate('classIds', 'name section displayName')
+      .populate('classSubmissionStatus.submittedBy', 'name')
+      .populate('classSubmissionStatus.reviewedBy', 'name');
+    
+    if (!exam) {
+      console.log('Exam not found with ID:', examId);
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+    
+    // Update submission stats for each class
+    for (const classStatus of exam.classSubmissionStatus) {
+      await exam.updateClassSubmissionStats(classStatus.classId);
+    }
+    
+    const updatedExam = await Exam.findById(examId)
+      .populate('classIds', 'name section displayName');
+    
+    // Get marks data for each class
+    const classesData = await Promise.all(updatedExam.classSubmissionStatus.map(async (cs) => {
+      const classInfo = updatedExam.classIds.find(c => c._id.toString() === cs.classId.toString());
+      
+      // Get marks for this class
+      const marks = await Mark.find({
+        examId: exam._id,
+        classId: cs.classId
+      });
+      
+      const totalStudents = cs.marksEntryStats?.totalStudents || 0;
+      const marksEntered = marks.length;
+      
+      const subjectWiseStats = await Promise.all(exam.subjects.map(async (subject) => {
+        const marksCount = await Mark.countDocuments({
+          examId: exam._id,
+          classId: cs.classId,
+          subjectId: subject.subjectId,
+          isFullyFinalized: true
+        });
+        
+        const scheduleInfo = exam.schedule.find(s => s.subjectId?.toString() === subject.subjectId?.toString());
+        
+        return {
+          subjectId: subject.subjectId,
+          subjectName: subject.subjectName,
+          maxMarks: subject.termMaxMarks || subject.maxMarks || 100,
+          passingMarks: subject.termPassingMarks || subject.passingMarks || 40,
+          theoryMarks: subject.theoryMaxMarks || 0,
+          practicalMarks: subject.practicalMaxMarks || 0,
+          hasPractical: (subject.practicalMaxMarks || 0) > 0,
+          ceEnabled: subject.ceEnabled || exam.ceConfig?.enabled || false,
+          ceMaxMarks: subject.ceMaxMarks || exam.ceConfig?.maxMarks || 0,
+          scheduleDate: scheduleInfo?.examDate,
+          scheduleSession: scheduleInfo?.session,
+          marksEntered: marksCount,
+          totalStudents: totalStudents,
+          pending: totalStudents - marksCount,
+          completionPercentage: totalStudents > 0 ? (marksCount / totalStudents) * 100 : 0
+        };
+      }));
+      
+      return {
+        classId: cs.classId,
+        className: classInfo?.displayName || cs.className,
+        section: classInfo?.section,
+        displayName: classInfo?.displayName,
+        status: cs.status || 'draft',
+        submittedBy: cs.submittedBy,
+        submittedByName: cs.submittedBy?.name,
+        submittedAt: cs.submittedAt,
+        reviewedBy: cs.reviewedBy,
+        reviewedByName: cs.reviewedBy?.name,
+        reviewedAt: cs.reviewedAt,
+        stats: {
+          totalStudents: totalStudents,
+          termMarksEntered: marksEntered,
+          marksPending: (totalStudents * exam.subjects.length) - marksEntered,
+          completionPercentage: cs.marksEntryStats?.completionPercentage || 0
+        },
+        subjectWiseStats
+      };
+    }));
+    
+    const summary = {
+      examId: exam._id,
+      examName: exam.displayName,
+      overallStatus: exam.overallStatus,
+      hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled),
+      hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+      classes: classesData,
+      totalClasses: exam.classIds.length,
+      classesSubmitted: exam.classSubmissionStatus.filter(cs => cs.status === 'submitted' || cs.status === 'reviewed').length,
+      classesReviewed: exam.classSubmissionStatus.filter(cs => cs.status === 'reviewed').length,
+      classesPublished: exam.classSubmissionStatus.filter(cs => cs.status === 'published').length,
+      readyForPublish: exam.classSubmissionStatus.every(cs => cs.status === 'reviewed'),
+      overallCompletion: exam.classSubmissionStatus.length > 0
+        ? exam.classSubmissionStatus.reduce((sum, cs) => sum + (cs.marksEntryStats?.completionPercentage || 0), 0) / exam.classSubmissionStatus.length
+        : 0
+    };
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error in getMarksEntrySummary:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Clone exam for next academic year
+exports.cloneExam = async (req, res) => {
+  try {
+    const sourceExam = await Exam.findById(req.params.id);
+    if (!sourceExam) {
+      return res.status(404).json({ message: 'Source exam not found' });
+    }
+    
+    const { newAcademicYearId } = req.body;
+    
+    const newAcademicYear = await AcademicYear.findById(newAcademicYearId);
+    if (!newAcademicYear) {
+      return res.status(404).json({ message: 'Academic year not found' });
+    }
+    
+    const examData = sourceExam.toObject();
+    delete examData._id;
+    delete examData.createdAt;
+    delete examData.updatedAt;
+    delete examData.__v;
+    
+    examData.academicYearId = newAcademicYearId;
+    examData.academicYear = newAcademicYear.year;
+    examData.name = `${sourceExam.name} (${newAcademicYear.year})`;
+    examData.isPublished = false;
+    examData.resultsPublished = false;
+    examData.overallStatus = 'draft';
+    examData.createdBy = req.user.id;
+    examData.resultsPublishedAt = null;
+    examData.resultsPublishedBy = null;
+    
+    examData.classSubmissionStatus = examData.classSubmissionStatus.map(cs => ({
+      classId: cs.classId,
+      status: 'draft',
+      marksEntryStats: { totalStudents: 0, termMarksEntered: 0, ceMarksEntered: 0, marksPending: 0 }
+    }));
+    
+    const newExam = await Exam.create(examData);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Exam cloned successfully',
+      data: await formatExamResponse(newExam)
+    });
+  } catch (error) {
+    console.error('Error cloning exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Publish exam (admin only)
+exports.publishExam = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id);
+    
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+    
+    const allReviewed = exam.classSubmissionStatus.every(cs => cs.status === 'reviewed');
+    if (!allReviewed) {
+      return res.status(400).json({ 
+        message: 'All classes must be reviewed before publishing results' 
+      });
+    }
+    
+    exam.resultsPublished = true;
+    exam.resultsPublishedAt = new Date();
+    exam.resultsPublishedBy = req.user.id;
+    exam.isPublished = true;
+    exam.overallStatus = 'published';
+    
+    exam.classSubmissionStatus.forEach(cs => {
+      cs.status = 'published';
+    });
+    
+    await exam.save();
+    
+    const MarkController = require('./markController');
+    for (const classStatus of exam.classSubmissionStatus) {
+      await MarkController.generateAndPublishResults(exam._id, classStatus.classId, req.user.id);
+    }
+    
+    // Notify all classes
+    for (const classId of exam.classIds) {
+      broadcastToClass(classId, 'results:published', {
+        examId: exam._id,
+        examName: exam.displayName,
+        classId,
+        timestamp: new Date()
+      });
+    }
+    
+    broadcastToRole('admin', 'results:published', {
+      examId: exam._id,
+      examName: exam.displayName,
+      classCount: exam.classIds.length,
+      timestamp: new Date()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Exam results published successfully',
+      exam: await formatExamResponse(exam)
+    });
+  } catch (error) {
+    console.error('Error publishing exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get upcoming exams
+exports.getUpcomingExams = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    
+    let classIds = [];
+    
+    if (userRole === 'parent') {
+      const students = await Student.find({ parentIds: userId });
+      classIds = [...new Set(students.map(s => s.classId.toString()))];
+    } else if (userRole === 'staff') {
+      const staff = await Staff.findOne({ userId });
+      if (staff) {
+        const assignments = await StaffAssignment.find({ 
+          staffId: staff._id,
+          academicYearId: { $exists: true }
+        });
+        classIds = [...new Set(assignments.flatMap(a => a.subjectsTaught.map(s => s.classId.toString())))];
+        if (staff.assignedClassId) {
+          classIds.push(staff.assignedClassId.toString());
+        }
+      }
+    } else if (userRole === 'admin') {
+      const currentYear = await AcademicYear.findOne({ isCurrent: true });
+      const classes = await Class.find({ academicYearId: currentYear?._id, isActive: true });
+      classIds = classes.map(c => c._id.toString());
+    }
+    
+    const today = new Date();
+    const exams = await Exam.find({
+      classIds: { $in: classIds },
+      endDate: { $gte: today },
+      isActive: true
+    })
+      .populate('classIds', 'name section displayName')
+      .populate('academicYearId', 'year')
+      .sort({ startDate: 1 })
+      .limit(10);
+    
+    const formattedExams = await Promise.all(exams.map(async (exam) => {
+      const examObj = await formatExamResponse(exam);
+      const daysLeft = Math.ceil((new Date(exam.startDate) - today) / (1000 * 60 * 60 * 24));
+      
+      return {
+        ...examObj,
+        daysLeft: daysLeft > 0 ? daysLeft : 0,
+        isUpcoming: daysLeft > 0,
+        isOngoing: new Date(exam.startDate) <= today && new Date(exam.endDate) >= today,
+        scheduleCount: exam.schedule.length,
+        hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+        hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled)
+      };
+    }));
+    
+    res.json({
+      success: true,
+      data: formattedExams
+    });
+  } catch (error) {
+    console.error('Error in getUpcomingExams:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exam analytics
+exports.getExamAnalytics = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+    
+    const stats = {
+      examId: exam._id,
+      examName: exam.displayName,
+      examType: exam.examType,
+      term: exam.term,
+      academicYear: exam.academicYear,
+      totalClasses: exam.classIds.length,
+      totalSubjects: exam.subjects.length,
+      hasCE: exam.ceConfig?.enabled || exam.subjects.some(s => s.ceEnabled),
+      hasPractical: exam.schedule.some(s => s.practicalMarks > 0),
+      classWise: [],
+      subjectWise: {},
+      overallStats: {
+        totalStudents: 0,
+        totalMarksEntered: 0,
+        totalMaxMarks: 0,
+        averagePercentage: 0,
+        passPercentage: 0
+      }
+    };
+    
+    let totalStudentsOverall = 0;
+    let totalMarksOverall = 0;
+    let totalMaxOverall = 0;
+    
+    let grandTotalExpectedSubjects = 0;
+    let grandTotalEnteredSubjects = 0;
+    
+    for (const classStatus of exam.classSubmissionStatus) {
+      const classInfo = await Class.findById(classStatus.classId)
+        .select('name section displayName subjectTeachers')
+        .populate('subjectTeachers.teacherId', 'name shortName staffCode');
+      
+      const staffAssignments = await StaffAssignment.find({
+        academicYearId: exam.academicYearId,
+        'subjectsTaught.classId': classStatus.classId
+      }).populate('staffId', 'name shortName staffCode');
+
+      const students = await Student.find({ classId: classStatus.classId, status: 'active' });
+      
+      const classAllMarks = await Mark.find({
+        examId: exam._id,
+        classId: classStatus.classId
+      });
+      
+      const subjectProgress = exam.subjects.map(subject => {
+        const expectedMarks = students.length;
+        const subjIdStr = subject.subjectId ? subject.subjectId.toString() : '';
+        const currentMarks = classAllMarks.filter(m => {
+          if (!m.subjects || !Array.isArray(m.subjects)) return false;
+          
+          const s = m.subjects.find(sub => 
+            (sub.subjectId && sub.subjectId.toString() === subjIdStr) ||
+            (sub.examSubjectId && sub.examSubjectId.toString() === subjIdStr) ||
+            (sub.subjectName === subject.subjectName)
+          );
+          
+          return Boolean(
+            s && (
+              s.isAbsent === true ||
+              s.isEnteredExplicitly === true ||
+              (s.isEntered === true && (
+                (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+                (s.ceScore != null && Number(s.ceScore) > 0) ||
+                s.isAbsent === true ||
+                s.isEnteredExplicitly === true
+              )) ||
+              (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+              (s.ceScore != null && Number(s.ceScore) > 0)
+            )
+          );
+        }).length;
+        
+        const teacherList = [];
+        const seenTeacherIds = new Set();
+
+        const stMatches = classInfo?.subjectTeachers?.filter(st => 
+          (st.subjectId && st.subjectId.toString() === subjIdStr) ||
+          (st.subjectId?._id && st.subjectId._id.toString() === subjIdStr)
+        ) || [];
+
+        for (const st of stMatches) {
+          if (st.teacherId) {
+            const tId = st.teacherId._id ? st.teacherId._id.toString() : st.teacherId.toString();
+            if (!seenTeacherIds.has(tId)) {
+              seenTeacherIds.add(tId);
+              teacherList.push({
+                shortName: st.teacherId.shortName || (st.teacherId.name ? st.teacherId.name.split(' ')[0] : ''),
+                name: st.teacherId.name || ''
+              });
+            }
+          } else if (st.teacherName) {
+            if (!seenTeacherIds.has(st.teacherName)) {
+              seenTeacherIds.add(st.teacherName);
+              teacherList.push({
+                shortName: st.teacherName.split(' ')[0],
+                name: st.teacherName
+              });
+            }
+          }
+        }
+
+        if (staffAssignments?.length > 0) {
+          const saMatches = staffAssignments.filter(sa => 
+            sa.subjectsTaught?.some(st => 
+              st.classId?.toString() === classStatus.classId.toString() &&
+              (st.subjectId?.toString() === subjIdStr || st.subjectId?._id?.toString() === subjIdStr)
+            )
+          );
+
+          for (const sa of saMatches) {
+            if (sa.staffId) {
+              const sId = sa.staffId._id ? sa.staffId._id.toString() : sa.staffId.toString();
+              if (!seenTeacherIds.has(sId)) {
+                seenTeacherIds.add(sId);
+                teacherList.push({
+                  shortName: sa.staffId.shortName || (sa.staffId.name ? sa.staffId.name.split(' ')[0] : ''),
+                  name: sa.staffId.name || ''
+                });
+              }
+            }
+          }
+        }
+
+        const teacherShortNames = teacherList.map(t => t.shortName).filter(Boolean);
+        const teacherFullNames = teacherList.map(t => t.name).filter(Boolean);
+
+        const teacherShortName = teacherShortNames.join(', ');
+        const teacherFullName = teacherFullNames.join(', ');
+
+        const percentage = expectedMarks > 0 ? Math.round((currentMarks / expectedMarks) * 100) : 0;
+        return {
+          subjectId: subject.subjectId,
+          subjectName: subject.subjectName,
+          expectedMarks,
+          currentMarks,
+          percentage,
+          teacherShortName: teacherShortName || '',
+          teacherName: teacherFullName || ''
+        };
+      });
+      
+      const enteredMarksheets = classAllMarks.filter(m => 
+        (m.totalMaxMarks > 0 && m.percentage != null && !isNaN(m.percentage)) ||
+        (m.subjects && m.subjects.some(s => s.isEntered || s.isAbsent || s.theoryScore > 0 || s.ceScore > 0))
+      );
+
+      const studentPercentages = enteredMarksheets.map(m => ({
+        studentId: m.studentId,
+        totalMarks: m.totalMarks || 0,
+        maxMarks: m.totalMaxMarks || 0,
+        percentage: m.percentage != null ? m.percentage : (m.totalMaxMarks > 0 ? (m.totalMarks / m.totalMaxMarks) * 100 : 0)
+      }));
+
+      const classTotalMarks = studentPercentages.reduce((sum, s) => sum + s.totalMarks, 0);
+      const classTotalMax = studentPercentages.reduce((sum, s) => sum + s.maxMarks, 0);
+      
+      const totalExpected = subjectProgress.reduce((sum, sp) => sum + sp.expectedMarks, 0);
+      const totalEntered = subjectProgress.reduce((sum, sp) => sum + sp.currentMarks, 0);
+      const completionPercentage = totalExpected > 0 ? Math.round((totalEntered / totalExpected) * 100) : 0;
+      
+      grandTotalExpectedSubjects += totalExpected;
+      grandTotalEnteredSubjects += totalEntered;
+
+      totalStudentsOverall += students.length;
+      totalMarksOverall += classTotalMarks;
+      totalMaxOverall += classTotalMax;
+      
+      const classAvgPct = studentPercentages.length > 0
+        ? Math.round((studentPercentages.reduce((sum, s) => sum + s.percentage, 0) / studentPercentages.length) * 10) / 10
+        : 0;
+      const classPassPct = studentPercentages.length > 0
+        ? Math.round((studentPercentages.filter(s => s.percentage >= 40).length / studentPercentages.length) * 1000) / 10
+        : 0;
+
+      stats.classWise.push({
+        classId: classStatus.classId,
+        className: classInfo?.displayName || `${classInfo?.name}-${classInfo?.section}`,
+        section: classInfo?.section,
+        totalStudents: students.length,
+        marksEntered: enteredMarksheets.length,
+        completionPercentage,
+        subjectProgress: subjectProgress,
+        totalMarks: classTotalMarks,
+        totalMaxMarks: classTotalMax,
+        averagePercentage: classAvgPct,
+        passPercentage: classPassPct,
+        gradeDistribution: {
+          'A+': studentPercentages.filter(s => s.percentage >= 90).length,
+          'A': studentPercentages.filter(s => s.percentage >= 80 && s.percentage < 90).length,
+          'B+': studentPercentages.filter(s => s.percentage >= 70 && s.percentage < 80).length,
+          'B': studentPercentages.filter(s => s.percentage >= 60 && s.percentage < 70).length,
+          'C+': studentPercentages.filter(s => s.percentage >= 50 && s.percentage < 60).length,
+          'C': studentPercentages.filter(s => s.percentage >= 40 && s.percentage < 50).length,
+          'D': studentPercentages.filter(s => s.percentage >= 30 && s.percentage < 40).length,
+          'E': studentPercentages.filter(s => s.percentage < 30).length
+        }
+      });
+    }
+
+    const remainingClasses = stats.classWise.filter(c => c.completionPercentage < 100);
+    const overallMarkEntryPercentage = grandTotalExpectedSubjects > 0
+      ? Math.round((grandTotalEnteredSubjects / grandTotalExpectedSubjects) * 1000) / 10
+      : 0;
+
+    stats.overallStats = {
+      totalStudents: totalStudentsOverall,
+      totalClasses: stats.classWise.length,
+      markEntryPercentage: overallMarkEntryPercentage,
+      totalExpectedSubjects: grandTotalExpectedSubjects,
+      totalEnteredSubjects: grandTotalEnteredSubjects,
+      remainingClassesCount: remainingClasses.length,
+      completedClassesCount: stats.classWise.length - remainingClasses.length
+    };
+    
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    console.error('Error in getExamAnalytics:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Export helper functions
+module.exports.generateAndPublishResults = async (examId, classId, publishedBy) => {
+  const Mark = require('../models/Mark');
+  const ExamResult = require('../models/ExamResult');
+  
+  const exam = await Exam.findById(examId);
+  if (!exam) return;
+  
+  const students = await Student.find({ classId, status: 'active' });
+  const results = [];
+  
+  for (const student of students) {
+    const marks = await Mark.find({
+      studentId: student._id,
+      examId,
+      classId,
+      isFinalized: true
+    });
+    
+    if (marks.length === 0) continue;
+    
+    const subjectResults = [];
+    let totalObtained = 0;
+    let totalMax = 0;
+    
+    for (const mark of marks) {
+      const subjectConfig = exam.getSubjectConfig(mark.subjectId);
+      const scheduleInfo = exam.getSubjectSchedule(mark.subjectId);
+      
+      if (!subjectConfig) continue;
+      
+      const maxMarks = subjectConfig.termMaxMarks || 100;
+      const obtainedMarks = mark.totalScore || 0;
+      const theoryMarks = mark.theoryScore || 0;
+      const practicalMarks = mark.practicalScore || 0;
+      const percentage = maxMarks > 0 ? (obtainedMarks / maxMarks) * 100 : 0;
+      const grade = percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 70 ? 'B+' : percentage >= 60 ? 'B' : percentage >= 50 ? 'C+' : percentage >= 40 ? 'C' : percentage >= 33 ? 'D' : 'F';
+      const status = percentage >= 40 ? 'pass' : 'fail';
+      
+      subjectResults.push({
+        subjectId: mark.subjectId,
+        subjectName: mark.subjectName,
+        subjectCode: subjectConfig.subjectCode,
+        maxMarks: maxMarks,
+        obtainedMarks: obtainedMarks,
+        theoryMarks: theoryMarks,
+        practicalMarks: practicalMarks,
+        percentage: percentage,
+        grade: grade,
+        status: status,
+        examDate: scheduleInfo?.examDate,
+        session: scheduleInfo?.session
+      });
+      
+      totalObtained += obtainedMarks;
+      totalMax += maxMarks;
+    }
+    
+    const overallPercentage = totalMax > 0 ? (totalObtained / totalMax) * 100 : 0;
+    const overallGrade = overallPercentage >= 90 ? 'A+' : overallPercentage >= 80 ? 'A' : overallPercentage >= 70 ? 'B+' : overallPercentage >= 60 ? 'B' : overallPercentage >= 50 ? 'C+' : overallPercentage >= 40 ? 'C' : overallPercentage >= 33 ? 'D' : 'F';
+    
+    const result = await ExamResult.findOneAndUpdate(
+      { studentId: student._id, examId },
+      {
+        studentId: student._id,
+        studentName: student.fullName,
+        studentCode: student.studentCode,
+        rollNumber: student.rollNumber,
+        examId,
+        examName: exam.displayName,
+        classId,
+        className: exam.classSubmissionStatus.find(cs => cs.classId.toString() === classId.toString())?.className,
+        academicYearId: exam.academicYearId,
+        academicYear: exam.academicYear,
+        term: exam.term,
+        subjectResults,
+        totalMarks: totalObtained,
+        totalMaxMarks: totalMax,
+        percentage: overallPercentage,
+        grade: overallGrade,
+        isPublished: true,
+        publishedAt: new Date(),
+        publishedBy
+      },
+      { upsert: true, new: true }
+    );
+    
+    results.push(result);
+  }
+  
+  // Update rankings
+  const sortedResults = results.sort((a, b) => b.percentage - a.percentage);
+  let rank = 1;
+  let prevPercentage = -1;
+  
+  for (let i = 0; i < sortedResults.length; i++) {
+    if (sortedResults[i].percentage !== prevPercentage) {
+      rank = i + 1;
+    }
+    sortedResults[i].rank = rank;
+    prevPercentage = sortedResults[i].percentage;
+    await sortedResults[i].save();
+  }
+  
+  return results;
+};
+
+
+// Get exam classes with details
+exports.getExamClasses = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id)
+      .populate('classIds', 'name section displayName academicYearId')
+      .populate('classSubmissionStatus.submittedBy', 'name')
+      .populate('classSubmissionStatus.reviewedBy', 'name');
+
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    // Update submission stats for each class
+    for (const classStatus of exam.classSubmissionStatus) {
+      await exam.updateClassSubmissionStats(classStatus.classId);
+    }
+
+    // Get fresh data after update
+    const updatedExam = await Exam.findById(req.params.id)
+      .populate('classIds', 'name section displayName');
+
+    const classes = await Promise.all(updatedExam.classSubmissionStatus.map(async (cs) => {
+      const classInfo = updatedExam.classIds.find(c => c._id.toString() === cs.classId.toString());
+      
+      // Get subject-wise stats
+      const subjectWiseStats = await Promise.all(exam.subjects.map(async (subject) => {
+        const marksCount = await Mark.countDocuments({
+          examId: exam._id,
+          classId: cs.classId,
+          subjectId: subject.subjectId
+        });
+        
+        const scheduleInfo = exam.schedule.find(s => s.subjectId?.toString() === subject.subjectId?.toString());
+        const totalStudents = cs.marksEntryStats?.totalStudents || 0;
+        
+        return {
+          subjectId: subject.subjectId,
+          subjectName: subject.subjectName,
+          maxMarks: subject.termMaxMarks || subject.maxMarks || 100,
+          passingMarks: subject.termPassingMarks || subject.passingMarks || 40,
+          theoryMarks: subject.theoryMaxMarks || 0,
+          practicalMarks: subject.practicalMaxMarks || 0,
+          hasPractical: (subject.practicalMaxMarks || 0) > 0,
+          ceEnabled: subject.ceEnabled || exam.ceConfig?.enabled || false,
+          marksEntered: marksCount,
+          totalStudents: totalStudents,
+          pending: totalStudents - marksCount,
+          completionPercentage: totalStudents > 0 ? (marksCount / totalStudents) * 100 : 0,
+          scheduleDate: scheduleInfo?.examDate,
+          scheduleSession: scheduleInfo?.session
+        };
+      }));
+
+      return {
+        classId: cs.classId,
+        className: classInfo?.displayName || cs.className || classInfo?.name,
+        section: classInfo?.section,
+        displayName: classInfo?.displayName,
+        totalStudents: cs.marksEntryStats?.totalStudents || 0,
+        status: cs.status || 'draft',
+        submittedBy: cs.submittedBy,
+        submittedByName: cs.submittedBy?.name,
+        submittedAt: cs.submittedAt,
+        reviewedBy: cs.reviewedBy,
+        reviewedByName: cs.reviewedBy?.name,
+        reviewedAt: cs.reviewedAt,
+        marksEntryStats: cs.marksEntryStats || {
+          totalStudents: 0,
+          termMarksEntered: 0,
+          ceMarksEntered: 0,
+          marksPending: 0,
+          completionPercentage: 0
+        },
+        subjectWiseStats
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        examId: exam._id,
+        examName: exam.displayName,
+        totalClasses: classes.length,
+        classesSubmitted: classes.filter(c => c.status === 'submitted' || c.status === 'reviewed').length,
+        classesReviewed: classes.filter(c => c.status === 'reviewed').length,
+        classesPublished: classes.filter(c => c.status === 'published').length,
+        readyForPublish: classes.length > 0 && classes.every(c => c.status === 'reviewed'),
+        classes
+      }
+    });
+  } catch (error) {
+    console.error('Error in getExamClasses:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exam subjects with details
+exports.getExamSubjects = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id)
+      .populate('subjects.subjectId', 'name code type department');
+
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    const subjects = exam.subjects.map(subject => {
+      const scheduleInfo = exam.schedule.find(s => s.subjectId?.toString() === subject.subjectId?.toString());
+      const hasCE = subject.ceEnabled || exam.ceConfig?.enabled;
+      
+      return {
+        subjectId: subject.subjectId?._id || subject.subjectId,
+        subjectName: subject.subjectName,
+        subjectCode: subject.subjectCode,
+        maxMarks: subject.maxMarks || subject.termMaxMarks || 100,
+        passingMarks: subject.passingMarks || subject.termPassingMarks || 40,
+        theoryMaxMarks: subject.theoryMaxMarks || subject.termMaxMarks || 80,
+        practicalMaxMarks: subject.practicalMaxMarks || 0,
+        hasPractical: (subject.practicalMaxMarks || 0) > 0,
+        ceEnabled: hasCE,
+        ceMaxMarks: hasCE ? (subject.ceMaxMarks || exam.ceConfig?.maxMarks || 0) : 0,
+        cePassingMarks: hasCE ? (subject.cePassingMarks || exam.ceConfig?.passingMarks || 0) : 0,
+        totalMaxMarks: (subject.maxMarks || subject.termMaxMarks || 0) + (subject.practicalMaxMarks || 0) + (hasCE ? (subject.ceMaxMarks || exam.ceConfig?.maxMarks || 0) : 0),
+        totalPassingMarks: (subject.passingMarks || subject.termPassingMarks || 0) + (hasCE ? (subject.cePassingMarks || exam.ceConfig?.passingMarks || 0) : 0),
+        examDate: scheduleInfo?.examDate,
+        session: scheduleInfo?.session,
+        roomNumber: scheduleInfo?.roomNumber,
+        building: scheduleInfo?.building
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        examId: exam._id,
+        examName: exam.displayName,
+        totalSubjects: subjects.length,
+        theorySubjects: subjects.filter(s => !s.hasPractical).length,
+        practicalSubjects: subjects.filter(s => s.hasPractical).length,
+        ceEnabledSubjects: subjects.filter(s => s.ceEnabled).length,
+        subjects
+      }
+    });
+  } catch (error) {
+    console.error('Error in getExamSubjects:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exam schedule details
+exports.getExamScheduleDetails = async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id)
+      .populate('schedule.subjectId', 'name code');
+
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    const schedule = exam.schedule.map(s => ({
+      subjectId: s.subjectId?._id || s.subjectId,
+      subjectName: s.subjectName,
+      subjectCode: s.subjectCode,
+      examDate: s.examDate,
+      session: s.session,
+      sessionLabel: {
+        BF: 'Morning (9:00 AM - 12:00 PM)',
+        AF: 'Afternoon (2:00 PM - 5:00 PM)',
+        FULL: 'Full Day (9:00 AM - 5:00 PM)'
+      }[s.session],
+      startTime: s.startTime,
+      endTime: s.endTime,
+      duration: s.duration,
+      maxMarks: s.maxMarks || s.termMaxMarks,
+      passingMarks: s.passingMarks || s.termPassingMarks,
+      theoryMarks: s.theoryMarks,
+      practicalMarks: s.practicalMarks || 0,
+      hasPractical: (s.practicalMarks || 0) > 0,
+      hasCE: s.ceEnabled || exam.ceConfig?.enabled || false,
+      ceMaxMarks: s.ceMaxMarks || exam.ceConfig?.maxMarks || 0,
+      roomNumber: s.roomNumber,
+      building: s.building,
+      invigilators: s.invigilatorNames || [],
+      notes: s.notes
+    }));
+
+    // Sort by date
+    schedule.sort((a, b) => new Date(a.examDate) - new Date(b.examDate));
+
+    res.json({
+      success: true,
+      data: {
+        examId: exam._id,
+        examName: exam.displayName,
+        startDate: exam.startDate,
+        endDate: exam.endDate,
+        totalSubjects: schedule.length,
+        schedule
+      }
+    });
+  } catch (error) {
+    console.error('Error in getExamScheduleDetails:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get exams for staff (class teacher only)
+exports.getStaffExams = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { academicYearId } = req.query;
+    
+    // Get staff record
+    const staff = await Staff.findOne({ userId });
+    if (!staff) {
+      return res.status(404).json({ message: 'Staff record not found' });
+    }
+    
+    const yearFilter = academicYearId ? { academicYearId } : {};
+
+    // Get classes where this staff is class teacher or subject teacher
+    const teacherClasses = await Class.find({
+      $or: [
+        { classTeacherId: staff._id },
+        { 'subjectTeachers.teacherId': staff._id }
+      ],
+      ...yearFilter,
+      isActive: true
+    }).select('_id classTeacherId subjectTeachers');
+
+    let staffOrConditions = [{ createdBy: userId }];
+
+    teacherClasses.forEach(cls => {
+      if (cls.classTeacherId && cls.classTeacherId.toString() === staff._id.toString()) {
+        staffOrConditions.push({ classIds: cls._id });
+      } else if (cls.subjectTeachers && cls.subjectTeachers.length > 0) {
+        const theirSubjects = cls.subjectTeachers.filter(st => st.teacherId && st.teacherId.toString() === staff._id.toString());
+        theirSubjects.forEach(st => {
+          if (st.subjectId) {
+            staffOrConditions.push({
+              classIds: cls._id,
+              'subjects.subjectId': st.subjectId
+            });
+          }
+        });
+      }
+    });
+
+    if (staffOrConditions.length === 1) { // Only createdBy condition, so no classes assigned
+      const createdExamsCount = await Exam.countDocuments({ createdBy: userId, ...yearFilter });
+      if (createdExamsCount === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          message: 'No classes assigned'
+        });
+      }
+    }
+
+    // Find exams for these classes matching specific subjects, or created by staff
+    const exams = await Exam.find({
+      $or: staffOrConditions,
+      ...yearFilter,
+      isActive: true
+    })
+      .populate('classIds', 'name section displayName')
+      .populate('academicYearId', 'year name')
+      .populate('subjects.subjectId', 'name code')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      data: exams
+    });
+  } catch (error) {
+    console.error('Error in getStaffExams:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Create exam for staff (class teacher)
+exports.createStaffExam = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      name,
+      examType,
+      description,
+      academicYearId,
+      term,
+      classIds,
+      subjects,
+      schedule,
+      schedulingMode,
+      startDate,
+      endDate,
+      settings,
+      termEntryDeadline,
+      resultDeclarationDate
+    } = req.body;
+    
+    // Get staff record
+    const staff = await Staff.findOne({ userId });
+    if (!staff) {
+      return res.status(404).json({ message: 'Staff record not found' });
+    }
+    
+    // Get classes where this staff is class teacher or subject teacher
+    const allowedClasses = await Class.find({
+      $or: [
+        { classTeacherId: staff._id },
+        { 'subjectTeachers.teacherId': staff._id }
+      ],
+      academicYearId: academicYearId,
+      isActive: true
+    }).select('_id');
+    
+    const allowedClassIds = allowedClasses.map(c => c._id.toString());
+    
+    // Verify that all selected classes are taught by this teacher
+    for (const classId of classIds) {
+      if (!allowedClassIds.includes(classId)) {
+        return res.status(403).json({ 
+          message: `You are not authorized to create exam for class ${classId}` 
+        });
+      }
+    }
+    
+    // Validate academic year
+    const academicYear = await AcademicYear.findById(academicYearId);
+    if (!academicYear) {
+      return res.status(404).json({ message: 'Academic year not found' });
+    }
+    
+    // Prepare exam data (same as existing createExam logic)
+    const examData = {
+      name: examType === 'custom' ? name : `${examType}_exam`,
+      examType,
+      description,
+      academicYearId,
+      academicYear: academicYear.year,
+      term,
+      classIds,
+      schedulingMode: schedulingMode || 'subject_schedule',
+      settings: settings || {},
+      createdBy: req.user.id,
+      termEntryDeadline: termEntryDeadline ? new Date(termEntryDeadline) : null,
+      resultDeclarationDate: resultDeclarationDate ? new Date(resultDeclarationDate) : null,
+      globalCeConfig: { enabled: false }
+    };
+    
+    // Handle schedule creation (same logic as createExam)
+    if (schedulingMode === 'date_range') {
+      examData.startDate = new Date(startDate);
+      examData.endDate = new Date(endDate);
+      if (!subjects || subjects.length === 0) {
+        examData.subjects = await autoPopulateSubjectsFromClasses(classIds);
+      } else {
+        examData.subjects = subjects;
+      }
+      examData.schedule = [];
+    } else {
+      const enrichedSchedule = [];
+      
+      for (const s of schedule) {
+        let subject = null;
+        if (!s.subjectName) {
+          subject = await Subject.findById(s.subjectId);
+        }
+        
+        const maxMarks = parseInt(s.maxMarks) || 100;
+        const passingMarks = parseInt(s.passingMarks) || Math.floor(maxMarks * 0.4);
+        const practicalMarks = parseInt(s.practicalMarks) || 0;
+        const theoryMarks = maxMarks - practicalMarks;
+        
+        let examDate = new Date(s.examDate);
+        if (isNaN(examDate.getTime())) {
+          return res.status(400).json({ 
+            message: `Invalid exam date for subject ${subject?.name || s.subjectName}` 
+          });
+        }
+        
+        const ceEnabled = s.ceEnabled || false;
+        const ceMaxMarks = ceEnabled ? (parseInt(s.ceMaxMarks) || 20) : 0;
+        const cePassingMarks = ceEnabled ? (parseInt(s.cePassingMarks) || 8) : 0;
+        
+        const ceComponents = (s.ceComponents || [])
+          .filter(c => c.name && c.name.trim())
+          .map(comp => ({
+            name: comp.name,
+            maxMarks: parseInt(comp.maxMarks) || 0,
+            weightage: parseInt(comp.weightage) || 0
+          }));
+        
+        enrichedSchedule.push({
+          subjectId: s.subjectId,
+          subjectName: subject?.name || s.subjectName,
+          subjectCode: subject?.code || s.subjectCode,
+          examDate: examDate,
+          session: s.session || 'BF',
+          startTime: s.startTime || (s.session === 'BF' ? '09:00 AM' : s.session === 'AF' ? '02:00 PM' : '09:00 AM'),
+          endTime: s.endTime || (s.session === 'BF' ? '12:00 PM' : s.session === 'AF' ? '05:00 PM' : '05:00 PM'),
+          duration: s.duration || (s.session === 'FULL' ? 480 : 180),
+          maxMarks: maxMarks,
+          passingMarks: passingMarks,
+          theoryMarks: theoryMarks,
+          practicalMarks: practicalMarks,
+          hasPractical: practicalMarks > 0,
+          termMaxMarks: maxMarks,
+          termPassingMarks: passingMarks,
+          termWeightage: 80,
+          ceEnabled: ceEnabled,
+          ceMaxMarks: ceMaxMarks,
+          cePassingMarks: cePassingMarks,
+          ceComponents: ceComponents,
+          ceWeightage: 20,
+          roomNumber: s.roomNumber || '',
+          building: s.building || '',
+          invigilators: s.invigilators || [],
+          invigilatorNames: s.invigilatorNames || [],
+          notes: s.notes || '',
+          isAbsentAllowed: s.isAbsentAllowed !== false,
+          graceTime: s.graceTime || 0
+        });
+      }
+      
+      examData.schedule = enrichedSchedule;
+      
+      const dates = enrichedSchedule.map(s => new Date(s.examDate));
+      examData.startDate = new Date(Math.min(...dates));
+      examData.endDate = new Date(Math.max(...dates));
+      
+      const subjectMap = new Map();
+      for (const s of enrichedSchedule) {
+        const subjectKey = s.subjectId.toString();
+        if (!subjectMap.has(subjectKey)) {
+          const isLanguage = s.subjectCode && ['MAL', 'ENG', 'HIN', 'ARB', 'URD'].includes(s.subjectCode);
+          
+          subjectMap.set(subjectKey, {
+            subjectId: s.subjectId,
+            subjectName: s.subjectName,
+            subjectCode: s.subjectCode,
+            termMaxMarks: s.maxMarks,
+            termPassingMarks: s.passingMarks,
+            theoryMaxMarks: s.theoryMarks,
+            practicalMaxMarks: s.practicalMarks,
+            hasPractical: s.practicalMarks > 0,
+            ceEnabled: s.ceEnabled,
+            ceMaxMarks: s.ceMaxMarks,
+            cePassingMarks: s.cePassingMarks,
+            ceComponents: s.ceComponents || [],
+            totalMaxMarks: (s.maxMarks || 0) + (s.ceMaxMarks || 0),
+            totalPassingMarks: (s.passingMarks || 0) + (s.cePassingMarks || 0),
+            weightage: 100,
+            termWeightage: 80,
+            ceWeightage: 20,
+            isLanguageSubject: isLanguage
+          });
+        }
+      }
+      examData.subjects = Array.from(subjectMap.values());
+    }
+    
+    // Build class submission status
+    const classNamesMap = await getClassNamesForStatus(classIds);
+    examData.classSubmissionStatus = await Promise.all(classIds.map(async (classId) => {
+      const totalStudents = await Student.countDocuments({ classId, status: 'active' });
+      return {
+        classId,
+        className: classNamesMap.get(classId.toString()) || 'Unknown',
+        classDisplayName: classNamesMap.get(classId.toString()) || 'Unknown',
+        status: 'draft',
+        totalStudents: totalStudents,
+        marksEntryStats: {
+          totalStudents: totalStudents,
+          termMarksEntered: 0,
+          ceMarksEntered: 0,
+          marksPending: totalStudents * examData.subjects.length,
+          completionPercentage: 0
+        }
+      };
+    }));
+    
+    const exam = await Exam.create(examData);
+    
+    // Populate references for response
+    const populatedExam = await Exam.findById(exam._id)
+      .populate('classIds', 'name section displayName')
+      .populate('academicYearId', 'year name')
+      .populate('subjects.subjectId', 'name code type department')
+      .populate('schedule.subjectId', 'name code')
+      .populate('createdBy', 'name email');
+    
+    res.status(201).json({
+      success: true,
+      data: await formatExamResponse(populatedExam)
+    });
+    
+  } catch (error) {
+    console.error('Error creating staff exam:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Notify subject staff to enter or submit exam marks
+// @route   POST /api/exams/:id/notify-staff
+// @access  Private (Admin / Principal)
+exports.notifyStaffForExamMarks = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { classId, subjectId, subjectName, allPending } = req.body;
+
+    if (!classId) {
+      return res.status(400).json({ success: false, message: 'Class ID is required' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Exam not found' });
+    }
+
+    const classInfo = await Class.findById(classId)
+      .select('name section displayName subjectTeachers classTeacherId')
+      .populate('subjectTeachers.teacherId', 'name shortName staffCode userId email')
+      .populate('classTeacherId', 'name shortName staffCode userId email');
+
+    if (!classInfo) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const className = classInfo.displayName || `${classInfo.name}-${classInfo.section || ''}`.trim();
+    const staffAssignments = await StaffAssignment.find({
+      academicYearId: exam.academicYearId,
+      'subjectsTaught.classId': classId
+    }).populate('staffId', 'name shortName staffCode userId email');
+
+    const students = await Student.find({ classId, status: 'active' });
+    const totalExpected = students.length;
+
+    const classAllMarks = await Mark.find({
+      examId: exam._id,
+      classId
+    });
+
+    const classStatusObj = (exam.classSubmissionStatus || []).find(
+      cs => cs.classId && cs.classId.toString() === classId.toString()
+    );
+
+    // Identify which subjects to process
+    let targetSubjects = [];
+    if (subjectId || subjectName) {
+      const targetSubjIdStr = subjectId ? subjectId.toString() : '';
+      const matched = (exam.subjects || []).filter(s =>
+        (s.subjectId && s.subjectId.toString() === targetSubjIdStr) ||
+        (s._id && s._id.toString() === targetSubjIdStr) ||
+        (subjectName && s.subjectName && s.subjectName.toLowerCase() === subjectName.toLowerCase())
+      );
+      targetSubjects = matched.length > 0 ? matched : [{ subjectId, subjectName }];
+    } else {
+      // All pending or draft subjects in the class
+      targetSubjects = (exam.subjects || []).filter(s => {
+        const sSub = classStatusObj?.subjectSubmissions?.find(sub =>
+          (sub.subjectId && s.subjectId && sub.subjectId.toString() === s.subjectId.toString()) ||
+          (sub.subjectName && s.subjectName && sub.subjectName.toLowerCase() === s.subjectName.toLowerCase())
+        );
+        return !sSub || sSub.status === 'draft' || sSub.status === null;
+      });
+    }
+
+    const notifiedTeachers = [];
+    const notifiedUserIds = new Set();
+
+    for (const subj of targetSubjects) {
+      const subjIdStr = subj.subjectId ? subj.subjectId.toString() : (subj._id ? subj._id.toString() : '');
+      const sName = subj.subjectName || 'Subject';
+
+      // Count marks entered for this subject
+      const enteredMarksCount = classAllMarks.filter(m => {
+        if (!m.subjects || !Array.isArray(m.subjects)) return false;
+        const s = m.subjects.find(sub =>
+          (sub.subjectId && sub.subjectId.toString() === subjIdStr) ||
+          (sub.examSubjectId && sub.examSubjectId.toString() === subjIdStr) ||
+          (sub.subjectName === sName)
+        );
+        return Boolean(
+          s && (
+            s.isAbsent === true ||
+            s.isEnteredExplicitly === true ||
+            (s.isEntered === true && (
+              (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+              (s.ceScore != null && Number(s.ceScore) > 0)
+            )) ||
+            (s.theoryScore != null && Number(s.theoryScore) > 0) ||
+            (s.ceScore != null && Number(s.ceScore) > 0)
+          )
+        );
+      }).length;
+
+      const is100Percent = totalExpected > 0 && enteredMarksCount >= totalExpected;
+      const pct = totalExpected > 0 ? Math.round((enteredMarksCount / totalExpected) * 100) : 0;
+
+      // Find teacher(s) for this subject in this class
+      const teacherCandidates = [];
+      const stMatches = classInfo?.subjectTeachers?.filter(st =>
+        (st.subjectId && st.subjectId.toString() === subjIdStr) ||
+        (st.subjectId?._id && st.subjectId._id.toString() === subjIdStr)
+      ) || [];
+
+      for (const st of stMatches) {
+        if (st.teacherId) {
+          teacherCandidates.push(st.teacherId);
+        }
+      }
+
+      if (staffAssignments?.length > 0) {
+        const saMatches = staffAssignments.filter(sa =>
+          sa.subjectsTaught?.some(st =>
+            st.classId?.toString() === classId.toString() &&
+            (st.subjectId?.toString() === subjIdStr || st.subjectId?._id?.toString() === subjIdStr)
+          )
+        );
+        for (const sa of saMatches) {
+          if (sa.staffId) {
+            teacherCandidates.push(sa.staffId);
+          }
+        }
+      }
+
+      // If no subject-specific teacher found, we can notify the class teacher
+      if (teacherCandidates.length === 0 && classInfo.classTeacherId) {
+        teacherCandidates.push(classInfo.classTeacherId);
+      }
+
+      for (const teacher of teacherCandidates) {
+        // Find User ID for this teacher
+        let targetUserId = teacher.userId?._id ? teacher.userId._id.toString() : (teacher.userId ? teacher.userId.toString() : null);
+        
+        if (!targetUserId) {
+          const staffRec = await Staff.findById(teacher._id || teacher).select('userId');
+          if (staffRec?.userId) {
+            targetUserId = staffRec.userId.toString();
+          }
+        }
+
+        if (!targetUserId) continue;
+
+        const dedupeKey = `${targetUserId}_${subjIdStr}`;
+        if (notifiedUserIds.has(dedupeKey)) continue;
+        notifiedUserIds.add(dedupeKey);
+
+        const isSubmitAction = is100Percent;
+        const title = isSubmitAction
+          ? `Submit Marks Reminder: ${sName} (${className})`
+          : `Mark Entry Reminder: ${sName} (${className})`;
+
+        const message = isSubmitAction
+          ? `Dear ${teacher.name || 'Teacher'}, all ${totalExpected} marks for ${sName} in ${className} (${exam.name}) have been entered (100%). Please review and submit marks for final verification.`
+          : `Dear ${teacher.name || 'Teacher'}, please complete mark entry for ${sName} in ${className} (${exam.name}). Currently ${enteredMarksCount}/${totalExpected} marks entered (${pct}%).`;
+
+        const notificationData = {
+          type: 'exam_mark_reminder',
+          examId: exam._id.toString(),
+          examName: exam.name,
+          classId: classId.toString(),
+          className,
+          subjectId: subjIdStr,
+          subjectName: sName,
+          action: isSubmitAction ? 'submit' : 'complete',
+          url: `/staff/marks-entry/${exam._id}/classes/${classId}`
+        };
+
+        const notif = await Notification.create({
+          senderId: req.user.id,
+          userId: targetUserId,
+          title,
+          message,
+          type: 'warning',
+          data: notificationData
+        });
+
+        broadcastToUser(targetUserId, 'notification', {
+          id: notif._id,
+          _id: notif._id,
+          userId: targetUserId,
+          title,
+          message,
+          type: 'warning',
+          data: notificationData,
+          timestamp: notif.createdAt,
+          createdAt: notif.createdAt,
+          read: false,
+          isRead: false
+        });
+
+        try {
+          const fcmService = require('../services/fcmService');
+          await fcmService.sendToUser(targetUserId, title, message, {
+            notificationId: notif._id.toString(),
+            type: 'exam_mark_reminder',
+            ...notificationData
+          });
+        } catch (fcmErr) {
+          console.warn('FCM send error (ignorable):', fcmErr.message);
+        }
+
+        notifiedTeachers.push({
+          teacherName: teacher.name,
+          subjectName: sName,
+          action: isSubmitAction ? 'submit' : 'complete'
+        });
+      }
+    }
+
+    if (notifiedTeachers.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No pending teachers found or teachers are already submitted',
+        count: 0,
+        notifiedTeachers: []
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully notified ${notifiedTeachers.length} teacher(s)`,
+      count: notifiedTeachers.length,
+      notifiedTeachers
+    });
+  } catch (error) {
+    console.error('Error notifying staff for exam marks:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};

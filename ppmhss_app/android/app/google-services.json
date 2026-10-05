@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "243520848367",
+    "project_id": "ppmhss-ac88c",
+    "storage_bucket": "ppmhss-ac88c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:243520848367:android:f059d6d82419c1c954361a",
+        "android_client_info": {
+          "package_name": "com.schoolmanagement.ppmhss"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDcNNvV_7rfb8dgs9aQzQSH7WQp_Wgi1nk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

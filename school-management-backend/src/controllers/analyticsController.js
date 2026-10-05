@@ -1,0 +1,2079 @@
+// controllers/analyticsController.js
+const Student = require("../models/Student");
+const Staff = require("../models/Staff");
+const Class = require("../models/Class");
+const Mark = require("../models/Mark");
+const { Exam } = require("../models/Exam");
+const ExamResult = require("../models/ExamResult");
+const { Attendance } = require("../models/Attendance");
+const AcademicYear = require("../models/AcademicYear");
+const StaffDuty = require("../models/StaffDuty");
+const mongoose = require("mongoose");
+const { RecentActivity, ACTIVITY_TYPES, ENTITY_TYPES, SEVERITY } = require("../models/RecentActivity");
+const { broadcastToRole, broadcastToUser } = require("../config/socket");
+const { getCache, setCache } = require("../config/redis");
+
+// ==================== HELPER FUNCTIONS ====================
+
+function getGradeFromPercentage(percentage) {
+  if (percentage >= 90) return "A+";
+  if (percentage >= 80) return "A";
+  if (percentage >= 70) return "B+";
+  if (percentage >= 60) return "B";
+  if (percentage >= 50) return "C+";
+  if (percentage >= 40) return "C";
+  if (percentage >= 30) return "D+";
+  if (percentage >= 20) return "D";
+  return "E";
+}
+
+function countAPlusGrades(subjectResults) {
+  if (!subjectResults || !Array.isArray(subjectResults)) return 0;
+  return subjectResults.filter((s) => 
+    s.grade === "A+" || 
+    s.grade === "A1" || 
+    (s.maxMarks > 0 && ((s.obtainedMarks || 0) / s.maxMarks) >= 0.90) ||
+    (s.percentage >= 90)
+  ).length;
+}
+
+// Helper to identify co-curricular subjects that do not have TE theory exams
+function isNonTeSubject(subject) {
+  if (!subject) return false;
+  const rawName = (
+    subject.displayName ||
+    subject.subjectName ||
+    subject.name ||
+    subject.title ||
+    ''
+  ).toLowerCase().trim();
+  const rawCode = (
+    subject.subjectCode ||
+    subject.code ||
+    ''
+  ).toLowerCase().trim();
+
+  const name = rawName.replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  const code = rawCode.replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Physical Education
+  if (
+    name.includes('physical education') ||
+    name.includes('phys educ') ||
+    name.includes('physical ed') ||
+    name === 'pe' || name === 'pet' || name === 'ped' || name === 'phe' ||
+    code === 'pet' || code === 'pe' || code === 'ped' || code === 'phe'
+  ) return true;
+
+  // Work Education
+  if (
+    name.includes('work education') ||
+    name.includes('work exp') ||
+    name.includes('work experience') ||
+    name === 'we' || name === 'wed' ||
+    code === 'we' || code === 'wed'
+  ) return true;
+
+  // Drawing / Art Education
+  if (
+    name.includes('drawing') ||
+    name.includes('art education') ||
+    name.includes('art culture') ||
+    name.includes('art and culture') ||
+    name === 'art' || name === 'ae' || name === 'draw' ||
+    code === 'draw' || code === 'ae' || code === 'art'
+  ) return true;
+
+  return false;
+}
+
+// Class Teacher short form mapping for PPM HSS
+const CLASS_TEACHER_SHORT_MAP = {
+  '10 A': 'RK', '10 B': 'AA', '10 C': 'MK', '10 D': 'PA', '10 E': 'MC',
+  '10 F': 'JP', '10 G': 'CT', '10 H': 'AN', '10 I': 'PS', '10 J': 'AS',
+  '9 A': 'SBC', '9 B': 'JE', '9 C': 'ACK', '9 D': 'SB', '9 E': 'MSD',
+  '9 F': 'MPK', '9 G': 'PKS', '9 H': 'BS', '9 I': 'JCT', '9 J': 'MJN',
+  '8 A': 'FK', '8 B': 'KSG', '8 C': 'HST', '8 D': 'ANC', '8 E': 'NKV',
+  '8 F': 'SM', '8 G': 'JCK', '8 H': 'RE', '8 I': 'PSN'
+};
+
+function generateTeacherShortName(fullName) {
+  if (!fullName) return '-';
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].substring(0, 3).toUpperCase();
+  if (parts.length === 2) return (parts[0].charAt(0) + parts[1].substring(0, 2)).toUpperCase();
+  return parts.map(p => p.charAt(0)).join('').toUpperCase();
+}
+
+function resolveTeacherShortName(cls, staff) {
+  if (staff?.shortName && staff.shortName.trim()) return staff.shortName.trim().toUpperCase();
+  if (staff?.shortForm && staff.shortForm.trim()) return staff.shortForm.trim().toUpperCase();
+  
+  const rawName = (cls.displayName || `${cls.name || ''} ${cls.section || ''}`).replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+  if (CLASS_TEACHER_SHORT_MAP[rawName]) return CLASS_TEACHER_SHORT_MAP[rawName];
+
+  if (cls.classTeacherName) return generateTeacherShortName(cls.classTeacherName);
+  if (staff?.name) return generateTeacherShortName(staff.name);
+  return '-';
+}
+
+async function createRecentActivity({
+  title,
+  description,
+  activityType,
+  entityType,
+  entityId = null,
+  entityModel = null,
+  performedBy,
+  performedByName,
+  performedByRole,
+  details = {},
+  changes = {},
+  ipAddress = null,
+  userAgent = null,
+  severity = SEVERITY.INFO,
+  batchId = null
+}) {
+  try {
+    const activity = await RecentActivity.create({
+      title,
+      description,
+      activityType,
+      entityType,
+      entityId,
+      entityModel,
+      performedBy,
+      performedByName,
+      performedByRole,
+      details,
+      changes,
+      ipAddress,
+      userAgent,
+      severity,
+      batchId
+    });
+    
+    broadcastToRole('admin', 'recent_activity:created', { activity });
+    broadcastToRole('staff', 'recent_activity:created', { activity });
+    
+    return activity;
+  } catch (error) {
+    console.error('Error creating recent activity:', error);
+    return null;
+  }
+}
+
+async function broadcastDashboardUpdate() {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [totalStudents, totalStaff, totalClasses, currentYear, attendanceToday] = await Promise.all([
+      Student.countDocuments({ status: 'active' }),
+      Staff.countDocuments({ isActive: true }),
+      Class.countDocuments({ isActive: true }),
+      AcademicYear.findOne({ isCurrent: true }),
+      Attendance.countDocuments({ createdAt: { $gte: today }, status: 'present' }),
+    ]);
+
+    const currentExams = currentYear
+      ? await Exam.countDocuments({ academicYearId: currentYear._id })
+      : 0;
+
+    const payload = { totalStudents, totalStaff, totalClasses, currentExams, attendanceToday, timestamp: new Date() };
+    broadcastToRole('admin', 'dashboard:updated', payload);
+    broadcastToRole('staff', 'dashboard:updated', payload);
+  } catch (error) {
+    console.error('Error broadcasting dashboard update:', error);
+  }
+}
+
+
+// ==================== DASHBOARD ANALYTICS ====================
+
+exports.getDashboardAnalytics = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [
+      totalStudents,
+      totalStaff,
+      totalClasses,
+      currentYear,
+      maleCount,
+      femaleCount,
+      otherCount,
+      categoryDistribution,
+      monthlyEnrollment,
+      recentMarks,
+      recentActivities,
+      pendingExams,
+      pendingDuties,
+      pendingAttendance,
+      attendanceToday,
+    ] = await Promise.all([
+      Student.countDocuments({ status: 'active' }),
+      Staff.countDocuments({ isActive: true }),
+      Class.countDocuments({ isActive: true }),
+      AcademicYear.findOne({ isCurrent: true }),
+      Student.countDocuments({ gender: 'M', status: 'active' }),
+      Student.countDocuments({ gender: 'F', status: 'active' }),
+      Student.countDocuments({ gender: 'Other', status: 'active' }),
+      Student.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: '$category', count: { $sum: 1 } } }
+      ]),
+      Student.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: { $month: '$createdAt' }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } }
+      ]),
+      Mark.find().sort({ createdAt: -1 }).limit(100),
+      RecentActivity.find({ activityType: { $ne: 'user_logout' } }).sort({ createdAt: -1 }).limit(10).populate('performedBy', 'name role'),
+      Exam.countDocuments({ overallStatus: { $in: ['draft', 'submitted'] }, isActive: true }),
+      StaffDuty?.countDocuments({ status: 'assigned' }).catch(() => 0) || Promise.resolve(0),
+      Attendance.countDocuments({ status: { $ne: 'present' }, createdAt: { $gte: today } }),
+      Attendance.countDocuments({ createdAt: { $gte: today }, status: 'present' }),
+    ]);
+
+    const currentExams = currentYear
+      ? await Exam.countDocuments({ academicYearId: currentYear._id, isActive: true })
+      : 0;
+
+    const fullAPlusCount = recentMarks.filter((m) => {
+      const subjects = m.subjects || [];
+      if (subjects.length === 0) return false;
+      return subjects.every((s) => s.grade === 'A+');
+    }).length;
+
+    let activities = recentActivities;
+    if (activities.length === 0) {
+      const [recentStudents, recentStaff, recentExams] = await Promise.all([
+        Student.find().sort({ createdAt: -1 }).limit(3).select('fullName createdAt'),
+        Staff.find().sort({ createdAt: -1 }).limit(2).select('name createdAt'),
+        Exam.find().sort({ createdAt: -1 }).limit(2).select('name createdAt'),
+      ]);
+
+      const sampleActivities = [
+        ...recentStudents.map((s) => ({ type: 'student_added', description: `New student added: ${s.fullName}`, timestamp: s.createdAt, performedByRole: 'admin' })),
+        ...recentStaff.map((s) => ({ type: 'staff_added', description: `New staff member: ${s.name}`, timestamp: s.createdAt, performedByRole: 'admin' })),
+        ...recentExams.map((e) => ({ type: 'exam_created', description: `New exam created: ${e.name}`, timestamp: e.createdAt, performedByRole: 'admin' })),
+      ];
+      activities = sampleActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 10);
+    } else {
+      activities = activities.map((activity) => ({
+        type: activity.activityType,
+        description: activity.description,
+        timestamp: activity.createdAt,
+        performedByRole: activity.performedByRole,
+        title: activity.title
+      }));
+    }
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const enrollmentTrend = monthlyEnrollment.map((item) => ({ month: monthNames[item._id - 1], count: item.count }));
+
+    res.json({
+      success: true,
+      data: {
+        totalStudents,
+        totalStaff,
+        totalClasses,
+        currentExams,
+        attendanceToday,
+        fullAPlusCount,
+        academicYear: currentYear?.year,
+        recentActivities: activities,
+        demographics: {
+          gender: { male: maleCount, female: femaleCount, other: otherCount },
+          category: categoryDistribution
+        },
+        enrollmentTrend,
+        pendingTasks: { exams: pendingExams, duties: pendingDuties, attendance: pendingAttendance }
+      },
+    });
+  } catch (error) {
+    console.error('Error in getDashboardAnalytics:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
+const getClassDisplayName = (mark) => {
+  const classObj = mark.classId;
+  if (classObj && typeof classObj === "object") {
+    if (classObj.name && classObj.section) return `${classObj.name}-${classObj.section}`;
+    if (classObj.displayName) return classObj.displayName;
+    if (classObj.name) return classObj.name;
+  }
+  const studentClassObj = mark.studentId?.classId;
+  if (studentClassObj && typeof studentClassObj === "object") {
+    if (studentClassObj.name && studentClassObj.section) return `${studentClassObj.name}-${studentClassObj.section}`;
+    if (studentClassObj.displayName) return studentClassObj.displayName;
+    if (studentClassObj.name) return studentClassObj.name;
+  }
+  if (mark.className) {
+    if (mark.section) return `${mark.className}-${mark.section}`;
+    return mark.className;
+  }
+  return "-";
+};
+
+// ==================== GRADE ANALYSIS (USING MARK MODEL) ====================
+
+exports.getGradeAnalysis = async (req, res) => {
+  try {
+    const { examId, classId, academicYearId } = req.query;
+
+    const query = {};
+    if (examId) query.examId = examId;
+    if (academicYearId) query.academicYearId = academicYearId;
+    if (classId) query.classId = classId;
+
+    console.log('Grade Analysis Query:', query);
+
+    const marks = await Mark.find(query)
+      .populate({
+        path: "studentId",
+        select: "fullName admissionNo rollNumber studentCode classId",
+        populate: { path: "classId", select: "name section displayName" },
+      })
+      .populate("classId", "name section displayName")
+      .sort({ percentage: -1 })
+      .lean();
+
+    // Default empty response
+    const emptyResponse = {
+      success: true,
+      data: {
+        analysis: {
+          fullAPlus: [], nineAPlus: [], eightAPlus: [], sevenAPlus: [],
+          sixAPlus: [], fiveAPlus: [],
+          fullAPlusWithoutMaths: [], fullAPlusWithoutEnglish: [],
+          fullAPlusWithoutMalayalam: [], fullAPlusWithoutMalayalamII: [],
+          fullAPlusWithoutHindi: [], fullAPlusWithoutArabic: [],
+          fullAPlusWithoutSocialScience: [], fullAPlusWithoutIT: [],
+          fullAPlusWithoutPhysics: [], fullAPlusWithoutChemistry: [],
+          fullAPlusWithoutBiology: [], fullAPlusWithoutFirstLanguage: [],
+          fullAPlusWithoutOther: [],
+          statistics: {
+            totalStudents: 0, fullAPlusCount: 0, nineAPlusCount: 0,
+            eightAPlusCount: 0, sevenAPlusCount: 0, sixAPlusCount: 0, fiveAPlusCount: 0,
+          },
+        },
+        gradeDistribution: {
+          "A+": 0, "A": 0, "B+": 0, "B": 0, "C+": 0, "C": 0, "D+": 0, "D": 0, "E": 0,
+        },
+        subjectWiseAPlus: {},
+        subjectWisePerformance: {},
+        totalStudents: 0,
+        studentResults: [],
+        summary: {
+          fullAPlus: 0, nineAPlus: 0, eightAPlus: 0, sevenAPlus: 0,
+          fullAPlusPercentage: 0, passPercentage: 0,
+        },
+      },
+    };
+
+    if (marks.length === 0) {
+      return res.json(emptyResponse);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // IMPORTANT: Fetch ALL relevant Exam docs in one query so we can
+    // look up the CORRECT TE-only max per subject from exam config.
+    // (The Mark.subjects[].teMaxMarks field is unreliable.)
+    // ═══════════════════════════════════════════════════════════════
+    const examIds = [
+      ...new Set(
+        marks
+          .map(m => m.examId && m.examId.toString())
+          .filter(Boolean)
+      )
+    ];
+
+    const examDocs = await Exam.find({ _id: { $in: examIds } })
+      .select('_id subjects subjectSchedules')
+      .lean();
+
+    const examDocMap = new Map(
+      examDocs.map(e => [e._id.toString(), e])
+    );
+
+    // Pre-build a per-exam subject-config lookup so we don't rebuild it per student
+    const examSubjectConfigLookup = new Map();
+    for (const [eid, examDoc] of examDocMap.entries()) {
+      const list = examDoc.subjects || examDoc.subjectSchedules || [];
+      const lookup = new Map();
+      for (const es of list) {
+        const nameKey = (es.subjectName || '').toLowerCase().trim();
+        const codeKey = (es.subjectCode || '').toLowerCase().trim();
+        if (nameKey) lookup.set(nameKey, es);
+        if (codeKey) lookup.set(codeKey, es);
+      }
+      examSubjectConfigLookup.set(eid, lookup);
+    }
+
+    const studentResults = [];
+    const gradeDistribution = {
+      "A+": 0, "A": 0, "B+": 0, "B": 0, "C+": 0, "C": 0, "D+": 0, "D": 0, "E": 0,
+    };
+    const subjectWiseAPlus = {};
+    const subjectWisePerformance = {};
+    const subjectWiseGradeDistribution = {};
+    let totalPassed = 0;
+
+    for (const mark of marks) {
+      const subjects = mark.subjects || [];
+      let totalTheoryMarks = 0;
+      let totalCeMarks = 0;
+      let totalCalculatedMarks = 0;
+
+      // Rank-specific totals (exclude non-TE subjects like PE / WE / Drawing)
+      let rankTeTotal = 0;
+      let rankTeMax = 0;
+      let rankCeTotal = 0;
+      let rankCeMax = 0;
+      let rankTotalObtained = 0;
+      let rankTotalMax = 0;
+
+      // Look up exam subject config map for THIS student's exam
+      const examIdStr = mark.examId && mark.examId.toString();
+      const configMap = examSubjectConfigLookup.get(examIdStr) || new Map();
+
+      const subjectResults = subjects.map(subject => {
+        const theory = Number(subject.theoryScore) || 0;
+        const ce = Number(subject.ceScore) || 0;
+        const practical = Number(subject.practicalScore) || 0;
+        const totalScore = Number(subject.totalScore) || (theory + ce + practical);
+
+        // Look up the exam-level subject config for the CORRECT maxes
+        const nameKey = (subject.subjectName || '').toLowerCase().trim();
+        const codeKey = (subject.subjectCode || '').toLowerCase().trim();
+        const examSubConfig = configMap.get(nameKey) || configMap.get(codeKey);
+
+        // Total max: prefer the mark's own maxMarks; else exam config; else 100
+        const totalMax =
+          Number(subject.maxMarks) ||
+          Number(examSubConfig?.maxMarks) ||
+          0;
+
+        // ── Compute TE max (TE-only portion, excluding CE) ──
+        let teMax;
+        let ceMax;
+
+        if (examSubConfig) {
+          const ceMaxFromConfig = Number(examSubConfig.ceMaxMarks) || 0;
+          const ceEnabled =
+            Boolean(examSubConfig.ceEnabled) && ceMaxFromConfig > 0;
+
+          if (ceEnabled) {
+            // TE = theoryMarks if explicitly set, else (totalMax - ceMax)
+            const explicitTheory = Number(examSubConfig.theoryMarks) || 0;
+            teMax = explicitTheory > 0
+              ? explicitTheory
+              : Math.max(0, totalMax - ceMaxFromConfig);
+            ceMax = ceMaxFromConfig;
+          } else {
+            teMax = totalMax;
+            ceMax = 0;
+          }
+        } else {
+          // Fallback: check the subject's own ceMaxMarks; else assume no CE
+          const ceFromSubject = Number(subject.ceMaxMarks) || 0;
+          if (ceFromSubject > 0 && ceFromSubject < totalMax) {
+            teMax = totalMax - ceFromSubject;
+            ceMax = ceFromSubject;
+          } else {
+            teMax = totalMax;
+            ceMax = 0;
+          }
+        }
+
+        totalTheoryMarks += theory;
+        totalCeMarks += (ce + practical);
+        totalCalculatedMarks += totalScore;
+
+        const isNonTe = isNonTeSubject(subject);
+
+        if (!isNonTe) {
+          rankTeTotal += theory;
+          rankTeMax += teMax;
+          rankCeTotal += (ce + practical);
+          rankCeMax += ceMax;
+          rankTotalObtained += totalScore;
+          rankTotalMax += totalMax;
+        }
+
+        return {
+          subjectName: subject.subjectName,
+          subjectCode: subject.subjectCode,
+          theoryScore: theory,
+          ceScore: ce,
+          practicalScore: practical,
+          grade: subject.grade,
+          percentage: subject.percentage || 0,
+          obtainedMarks: totalScore,
+          maxMarks: totalMax,
+          teMaxMarks: teMax,
+          ceMaxMarks: ceMax,
+          isAbsent: subject.isAbsent || false,
+          isNonTe: isNonTe,
+        };
+      });
+
+      const finalTotalMarks = mark.totalMarks || totalCalculatedMarks || (totalTheoryMarks + totalCeMarks);
+      const totalMaxMarks = mark.totalMaxMarks || 0;
+      const finalPercentage = mark.percentage || (totalMaxMarks > 0 ? (finalTotalMarks / totalMaxMarks) * 100 : 0);
+
+      const academicSubjects = subjectResults.filter(s => !s.isNonTe);
+      const academicAplusCount = countAPlusGrades(academicSubjects);
+      const academicTotalSubjects = academicSubjects.length;
+
+      const studentInfo = {
+        studentId: mark.studentId?._id || mark.studentId,
+        studentName: mark.studentName || mark.studentId?.fullName || "Unknown",
+        studentCode: mark.studentCode || mark.studentId?.studentCode || "",
+        rollNumber: mark.rollNumber || mark.studentId?.rollNumber || "",
+        admissionNumber: mark.admissionNo || mark.studentId?.admissionNo || "",
+        className: getClassDisplayName(mark),
+        totalTheoryMarks,
+        totalCeMarks,
+        totalMarks: finalTotalMarks,
+        totalMaxMarks,
+        percentage: Math.round(finalPercentage * 10) / 10,
+        grade: mark.grade || getGradeFromPercentage(finalPercentage),
+        status: finalPercentage >= 40 ? "Passed" : "Failed",
+        rank: mark.rank,
+        subjectResults: subjectResults,
+        aplusCount: countAPlusGrades(subjectResults),
+        totalSubjects: subjects.length,
+        rankTeTotal,
+        rankTeMax,
+        rankCeTotal,
+        rankCeMax,
+        rankTotalObtained,
+        rankTotalMax,
+        rankTePercentage: rankTeMax > 0 ? (rankTeTotal / rankTeMax) * 100 : 0,
+        rankTotalPercentage: rankTotalMax > 0 ? (rankTotalObtained / rankTotalMax) * 100 : 0,
+        academicAplusCount,
+        academicTotalSubjects,
+      };
+
+      studentResults.push(studentInfo);
+
+      if (gradeDistribution[studentInfo.grade] !== undefined) {
+        gradeDistribution[studentInfo.grade]++;
+      }
+
+      if (finalPercentage >= 40) totalPassed++;
+
+      for (const subject of subjects) {
+        const subjectName = subject.subjectName || "Unknown";
+        if (!subjectWiseAPlus[subjectName]) {
+          subjectWiseAPlus[subjectName] = 0;
+        }
+        if (!subjectWisePerformance[subjectName]) {
+          subjectWisePerformance[subjectName] = { total: 0, max: 0, count: 0 };
+        }
+        if (!subjectWiseGradeDistribution[subjectName]) {
+          subjectWiseGradeDistribution[subjectName] = {
+            "A+": 0, "A": 0, "B+": 0, "B": 0, "C+": 0, "C": 0, "D+": 0, "D": 0, "E": 0, "AB": 0, total: 0
+          };
+        }
+
+        let g = subject.grade;
+        if (subject.isAbsent) g = "AB";
+        if (g) {
+          if (subjectWiseGradeDistribution[subjectName][g] === undefined) {
+            subjectWiseGradeDistribution[subjectName][g] = 0;
+          }
+          subjectWiseGradeDistribution[subjectName][g]++;
+        }
+        subjectWiseGradeDistribution[subjectName].total++;
+
+        if (subject.grade === "A+") {
+          subjectWiseAPlus[subjectName]++;
+        }
+        subjectWisePerformance[subjectName].total += subject.totalScore || 0;
+        subjectWisePerformance[subjectName].max += subject.maxMarks || 0;
+        subjectWisePerformance[subjectName].count++;
+      }
+    }
+
+    Object.keys(subjectWisePerformance).forEach(subject => {
+      const perf = subjectWisePerformance[subject];
+      perf.averagePercentage = perf.max > 0 ? (perf.total / perf.max) * 100 : 0;
+    });
+
+    const analysis = {
+      fullAPlus: [], nineAPlus: [], eightAPlus: [], sevenAPlus: [],
+      sixAPlus: [], fiveAPlus: [],
+      fullAPlusWithoutMaths: [], fullAPlusWithoutEnglish: [],
+      fullAPlusWithoutMalayalam: [], fullAPlusWithoutMalayalamII: [],
+      fullAPlusWithoutHindi: [], fullAPlusWithoutArabic: [],
+      fullAPlusWithoutSocialScience: [], fullAPlusWithoutIT: [],
+      fullAPlusWithoutPhysics: [], fullAPlusWithoutChemistry: [],
+      fullAPlusWithoutBiology: [], fullAPlusWithoutFirstLanguage: [],
+      fullAPlusWithoutOther: [],
+      missingAPlusBySubject: {},
+      statistics: {
+        totalStudents: studentResults.length,
+        fullAPlusCount: 0, nineAPlusCount: 0, eightAPlusCount: 0,
+        sevenAPlusCount: 0, sixAPlusCount: 0, fiveAPlusCount: 0,
+      },
+    };
+
+    for (const student of studentResults) {
+      const totalSubjects = (student.academicTotalSubjects && student.academicTotalSubjects > 0)
+        ? student.academicTotalSubjects
+        : student.totalSubjects;
+      const aplusCount = (student.academicTotalSubjects && student.academicTotalSubjects > 0)
+        ? student.academicAplusCount
+        : student.aplusCount;
+
+      if (totalSubjects === 0) continue;
+
+      if (aplusCount === totalSubjects && totalSubjects > 0) {
+        analysis.fullAPlus.push(student);
+        analysis.statistics.fullAPlusCount++;
+      } else if (aplusCount === totalSubjects - 1 || aplusCount === 9) {
+        analysis.nineAPlus.push(student);
+        analysis.statistics.nineAPlusCount++;
+      } else if (aplusCount === totalSubjects - 2 || (aplusCount === 8 && totalSubjects > 9)) {
+        analysis.eightAPlus.push(student);
+        analysis.statistics.eightAPlusCount++;
+      } else if (aplusCount === totalSubjects - 3 || (aplusCount === 7 && totalSubjects > 9)) {
+        analysis.sevenAPlus.push(student);
+        analysis.statistics.sevenAPlusCount++;
+      } else if (aplusCount === totalSubjects - 4 || (aplusCount === 6 && totalSubjects > 9)) {
+        analysis.sixAPlus.push(student);
+        analysis.statistics.sixAPlusCount++;
+      } else if (aplusCount === totalSubjects - 5 || (aplusCount === 5 && totalSubjects > 9)) {
+        analysis.fiveAPlus.push(student);
+        analysis.statistics.fiveAPlusCount++;
+      }
+
+      if ((aplusCount === totalSubjects - 1 || aplusCount === 9) && totalSubjects > 1) {
+        const nonAPlusSubject = student.subjectResults.find(s => {
+          if (s.isNonTe) return false;
+          if (s.isAbsent) return true;
+          if (s.grade === "A+" || s.grade === "A1") return false;
+          if (s.maxMarks > 0 && ((s.obtainedMarks || 0) / s.maxMarks) >= 0.90) return false;
+          if (s.percentage >= 90) return false;
+          return true;
+        });
+        
+        const missingSubjectName = nonAPlusSubject?.subjectName || nonAPlusSubject?.displayName || "Other";
+        const missingGrade = nonAPlusSubject?.isAbsent ? "AB" : (nonAPlusSubject?.grade || "A");
+        
+        const nearFullInfo = {
+          ...student,
+          missingSubject: missingSubjectName,
+          missingSubjectGrade: missingGrade,
+          missingSubjectMarks: nonAPlusSubject?.obtainedMarks || 0,
+        };
+
+        if (!analysis.missingAPlusBySubject[missingSubjectName]) {
+          analysis.missingAPlusBySubject[missingSubjectName] = [];
+        }
+        analysis.missingAPlusBySubject[missingSubjectName].push(nearFullInfo);
+
+        const missingLower = missingSubjectName.toLowerCase();
+        if (missingLower.includes("math")) {
+          analysis.fullAPlusWithoutMaths.push(nearFullInfo);
+        } else if (missingLower.includes("english")) {
+          analysis.fullAPlusWithoutEnglish.push(nearFullInfo);
+        } else if (missingLower.includes("physics")) {
+          analysis.fullAPlusWithoutPhysics.push(nearFullInfo);
+        } else if (missingLower.includes("chem")) {
+          analysis.fullAPlusWithoutChemistry.push(nearFullInfo);
+        } else if (missingLower.includes("bio")) {
+          analysis.fullAPlusWithoutBiology.push(nearFullInfo);
+        } else if (missingLower.includes("hindi")) {
+          analysis.fullAPlusWithoutHindi.push(nearFullInfo);
+        } else if (missingLower.includes("arabic")) {
+          analysis.fullAPlusWithoutArabic.push(nearFullInfo);
+        } else if (missingLower.includes("malayalam ii") || missingLower.includes("malayalam 2") || missingLower.includes("malayalam paper 2")) {
+          analysis.fullAPlusWithoutMalayalamII.push(nearFullInfo);
+        } else if (missingLower.includes("malayalam")) {
+          analysis.fullAPlusWithoutMalayalam.push(nearFullInfo);
+        } else if (missingLower.includes("social") || missingLower.includes("ss")) {
+          analysis.fullAPlusWithoutSocialScience.push(nearFullInfo);
+        } else if (missingLower.includes("it") || missingLower.includes("computer")) {
+          analysis.fullAPlusWithoutIT.push(nearFullInfo);
+        } else if (missingLower.includes("first language")) {
+          analysis.fullAPlusWithoutFirstLanguage.push(nearFullInfo);
+        } else {
+          analysis.fullAPlusWithoutOther.push(nearFullInfo);
+        }
+      }
+    }
+
+    // 1. TE Only Rank (Default) — EXCLUDES non-TE subjects
+    const sortedByTe = [...studentResults].sort((a, b) => {
+      if ((b.rankTeTotal || 0) !== (a.rankTeTotal || 0)) {
+        return (b.rankTeTotal || 0) - (a.rankTeTotal || 0);
+      }
+      if ((b.rankTePercentage || 0) !== (a.rankTePercentage || 0)) {
+        return (b.rankTePercentage || 0) - (a.rankTePercentage || 0);
+      }
+      return (b.rankTotalObtained || 0) - (a.rankTotalObtained || 0);
+    });
+
+    let currentTeRank = 1;
+    for (let i = 0; i < sortedByTe.length; i++) {
+      if (
+        i > 0 &&
+        ((sortedByTe[i].rankTeTotal || 0) < (sortedByTe[i - 1].rankTeTotal || 0) ||
+         (sortedByTe[i].rankTePercentage || 0) < (sortedByTe[i - 1].rankTePercentage || 0) ||
+         (sortedByTe[i].rankTotalObtained || 0) < (sortedByTe[i - 1].rankTotalObtained || 0))
+      ) {
+        currentTeRank = i + 1;
+      }
+      sortedByTe[i].teRank = currentTeRank;
+    }
+
+    // 2. TE + CE Combined Rank — EXCLUDES non-TE subjects
+    const sortedByTeCe = [...studentResults].sort((a, b) => {
+      if ((b.rankTotalObtained || 0) !== (a.rankTotalObtained || 0)) {
+        return (b.rankTotalObtained || 0) - (a.rankTotalObtained || 0);
+      }
+      if ((b.rankTotalPercentage || 0) !== (a.rankTotalPercentage || 0)) {
+        return (b.rankTotalPercentage || 0) - (a.rankTotalPercentage || 0);
+      }
+      return (b.rankTeTotal || 0) - (a.rankTeTotal || 0);
+    });
+
+    let currentTeCeRank = 1;
+    for (let i = 0; i < sortedByTeCe.length; i++) {
+      if (
+        i > 0 &&
+        ((sortedByTeCe[i].rankTotalObtained || 0) < (sortedByTeCe[i - 1].rankTotalObtained || 0) ||
+         (sortedByTeCe[i].rankTotalPercentage || 0) < (sortedByTeCe[i - 1].rankTotalPercentage || 0) ||
+         (sortedByTeCe[i].rankTeTotal || 0) < (sortedByTeCe[i - 1].rankTeTotal || 0))
+      ) {
+        currentTeCeRank = i + 1;
+      }
+      sortedByTeCe[i].teCeRank = currentTeCeRank;
+    }
+
+    studentResults.sort((a, b) => {
+      if (a.teRank !== b.teRank) {
+        return (a.teRank || 999999) - (b.teRank || 999999);
+      }
+      if ((b.rankTePercentage || 0) !== (a.rankTePercentage || 0)) {
+        return (b.rankTePercentage || 0) - (a.rankTePercentage || 0);
+      }
+      return (b.rankTotalPercentage || 0) - (a.rankTotalPercentage || 0);
+    });
+
+    const totalStudents = studentResults.length;
+    const fullAPlusCount = analysis.statistics.fullAPlusCount;
+    const passPercentage = totalStudents > 0 ? (totalPassed / totalStudents) * 100 : 0;
+
+    res.json({
+      success: true,
+      data: {
+        analysis,
+        gradeDistribution,
+        subjectWiseAPlus,
+        subjectWisePerformance,
+        subjectWiseGradeDistribution,
+        totalStudents,
+        studentResults,
+        summary: {
+          fullAPlus: fullAPlusCount,
+          nineAPlus: analysis.statistics.nineAPlusCount,
+          eightAPlus: analysis.statistics.eightAPlusCount,
+          sevenAPlus: analysis.statistics.sevenAPlusCount,
+          fullAPlusPercentage: totalStudents > 0 ? (fullAPlusCount / totalStudents) * 100 : 0,
+          passPercentage: passPercentage,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error in getGradeAnalysis:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== FULL A+ STUDENTS ====================
+
+exports.getFullAPlusStudents = async (req, res) => {
+  try {
+    const { examId, classId, academicYearId } = req.query;
+
+    const cacheKey = `analytics:full-aplus:${examId || 'all'}:${classId || 'all'}:${academicYearId || 'all'}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const matchStage = {};
+    if (examId && mongoose.Types.ObjectId.isValid(examId)) matchStage.examId = new mongoose.Types.ObjectId(examId);
+    else if (examId) matchStage.examId = examId;
+
+    if (classId && mongoose.Types.ObjectId.isValid(classId)) matchStage.classId = new mongoose.Types.ObjectId(classId);
+    else if (classId) matchStage.classId = classId;
+
+    if (academicYearId && mongoose.Types.ObjectId.isValid(academicYearId)) matchStage.academicYearId = new mongoose.Types.ObjectId(academicYearId);
+    else if (academicYearId) matchStage.academicYearId = academicYearId;
+
+    const pipeline = [
+      { $match: matchStage },
+      {
+        $project: {
+          studentId: 1,
+          studentName: 1,
+          rollNumber: 1,
+          admissionNo: 1,
+          className: 1,
+          section: 1,
+          classId: 1,
+          totalMarks: 1,
+          totalMaxMarks: 1,
+          percentage: 1,
+          rank: 1,
+          subjects: 1,
+          totalSubjects: { $size: { $ifNull: ["$subjects", []] } },
+          aplusCount: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$subjects", []] },
+                as: "sub",
+                cond: { $eq: ["$$sub.grade", "A+"] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          totalSubjects: { $gt: 0 },
+          $expr: { $eq: ["$aplusCount", "$totalSubjects"] }
+        }
+      },
+      { $sort: { percentage: -1 } },
+      {
+        $lookup: {
+          from: "students",
+          localField: "studentId",
+          foreignField: "_id",
+          as: "studentDoc"
+        }
+      },
+      {
+        $lookup: {
+          from: "classes",
+          localField: "classId",
+          foreignField: "_id",
+          as: "classDoc"
+        }
+      },
+      {
+        $addFields: {
+          studentInfo: { $arrayElemAt: ["$studentDoc", 0] },
+          classInfo: { $arrayElemAt: ["$classDoc", 0] }
+        }
+      }
+    ];
+
+    const fullAPlusStudents = await Mark.aggregate(pipeline);
+
+    const getDisplayName = (s) => {
+      const cls = s.classInfo;
+      if (cls && typeof cls === "object") {
+        if (cls.name && cls.section) return `${cls.name}-${cls.section}`;
+        if (cls.displayName) return cls.displayName;
+        if (cls.name) return cls.name;
+      }
+      const stCls = s.studentInfo?.classId;
+      if (stCls && typeof stCls === "object") {
+        if (stCls.name && stCls.section) return `${stCls.name}-${stCls.section}`;
+        if (stCls.displayName) return stCls.displayName;
+        if (stCls.name) return stCls.name;
+      }
+      if (s.className) {
+        if (s.section) return `${s.className}-${s.section}`;
+        return s.className;
+      }
+      return "-";
+    };
+
+    const response = {
+      success: true,
+      data: fullAPlusStudents.map((s) => ({
+        studentId: s.studentId,
+        studentName: s.studentName,
+        rollNumber: s.rollNumber,
+        admissionNumber: s.admissionNo,
+        className: getDisplayName(s),
+        totalMarks: s.totalMarks,
+        totalMaxMarks: s.totalMaxMarks,
+        percentage: s.percentage,
+        rank: s.rank,
+        photoUrl: s.studentInfo?.photoUrl,
+      })),
+      total: fullAPlusStudents.length,
+    };
+
+    await setCache(cacheKey, response, 60);
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error in getFullAPlusStudents:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== NEAR FULL A+ STUDENTS ====================
+
+exports.getNearFullAPlusStudents = async (req, res) => {
+  try {
+    const { examId, classId, academicYearId, missingSubject } = req.query;
+
+    const cacheKey = `analytics:near-full-aplus:${examId || 'all'}:${classId || 'all'}:${academicYearId || 'all'}:${missingSubject || 'none'}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const matchStage = {};
+    if (examId && mongoose.Types.ObjectId.isValid(examId)) matchStage.examId = new mongoose.Types.ObjectId(examId);
+    else if (examId) matchStage.examId = examId;
+
+    if (classId && mongoose.Types.ObjectId.isValid(classId)) matchStage.classId = new mongoose.Types.ObjectId(classId);
+    else if (classId) matchStage.classId = classId;
+
+    if (academicYearId && mongoose.Types.ObjectId.isValid(academicYearId)) matchStage.academicYearId = new mongoose.Types.ObjectId(academicYearId);
+    else if (academicYearId) matchStage.academicYearId = academicYearId;
+
+    const pipeline = [
+      { $match: matchStage },
+      {
+        $project: {
+          studentId: 1,
+          studentName: 1,
+          rollNumber: 1,
+          admissionNo: 1,
+          className: 1,
+          section: 1,
+          classId: 1,
+          totalMarks: 1,
+          totalMaxMarks: 1,
+          percentage: 1,
+          rank: 1,
+          subjects: 1,
+          totalSubjects: { $size: { $ifNull: ["$subjects", []] } },
+          aplusCount: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$subjects", []] },
+                as: "sub",
+                cond: { $eq: ["$$sub.grade", "A+"] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          totalSubjects: { $gt: 0 },
+          $expr: { $eq: ["$aplusCount", { $subtract: ["$totalSubjects", 1] }] }
+        }
+      },
+      { $sort: { percentage: -1 } },
+      {
+        $lookup: {
+          from: "classes",
+          localField: "classId",
+          foreignField: "_id",
+          as: "classDoc"
+        }
+      },
+      {
+        $addFields: {
+          classInfo: { $arrayElemAt: ["$classDoc", 0] }
+        }
+      }
+    ];
+
+    const nearFullAPlus = await Mark.aggregate(pipeline);
+
+    const getDisplayName = (s) => {
+      const cls = s.classInfo;
+      if (cls && typeof cls === "object") {
+        if (cls.name && cls.section) return `${cls.name}-${cls.section}`;
+        if (cls.displayName) return cls.displayName;
+        if (cls.name) return cls.name;
+      }
+      if (s.className) {
+        if (s.section) return `${s.className}-${s.section}`;
+        return s.className;
+      }
+      return "-";
+    };
+
+    let filtered = nearFullAPlus;
+    if (missingSubject) {
+      filtered = filtered.filter((s) => {
+        const nonAPlusSubject = (s.subjects || []).find((sub) => sub.grade !== "A+");
+        return nonAPlusSubject?.subjectName?.toLowerCase().includes(missingSubject.toLowerCase());
+      });
+    }
+
+    const response = {
+      success: true,
+      data: filtered.map((s) => {
+        const subjects = s.subjects || [];
+        const nonAPlusSubject = subjects.find((sub) => sub.grade !== "A+");
+        const aplusCount = s.aplusCount;
+        
+        return {
+          studentId: s.studentId,
+          studentName: s.studentName,
+          rollNumber: s.rollNumber,
+          className: getDisplayName(s),
+          totalMarks: s.totalMarks,
+          totalMaxMarks: s.totalMaxMarks,
+          percentage: s.percentage,
+          rank: s.rank,
+          aplusCount: aplusCount,
+          totalSubjects: subjects.length,
+          missingSubject: nonAPlusSubject?.subjectName,
+          missingSubjectGrade: nonAPlusSubject?.grade,
+          missingSubjectMarks: nonAPlusSubject?.totalScore,
+        };
+      }),
+      total: filtered.length,
+    };
+
+    await setCache(cacheKey, response, 60);
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error in getNearFullAPlusStudents:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== TOP PERFORMING CLASSES ====================
+
+exports.getTopPerformingClasses = async (req, res) => {
+  try {
+    const { examId, academicYearId, limit = 10 } = req.query;
+
+    const matchStage = {};
+    if (examId) matchStage.examId = require('mongoose').Types.ObjectId.createFromHexString(examId);
+    if (academicYearId) matchStage.academicYearId = require('mongoose').Types.ObjectId.createFromHexString(academicYearId);
+
+    const [classStats, classes] = await Promise.all([
+      Mark.aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: '$classId',
+            totalMarks: { $sum: '$totalMarks' },
+            totalMaxMarks: { $sum: '$totalMaxMarks' },
+            studentCount: { $sum: 1 },
+          },
+        },
+      ]),
+      Class.find({ isActive: true }).select('_id name section'),
+    ]);
+
+    const classMap = new Map(classes.map((c) => [c._id.toString(), c]));
+
+    const classPerformance = classStats
+      .map((stat) => {
+        const classItem = classMap.get(stat._id.toString());
+        if (!classItem || stat.studentCount === 0) return null;
+        const averagePercentage = stat.totalMaxMarks > 0 ? (stat.totalMarks / stat.totalMaxMarks) * 100 : 0;
+        return {
+          classId: stat._id,
+          className: classItem.section ? `${classItem.name}-${classItem.section}` : classItem.name,
+          averagePercentage,
+          totalStudents: stat.studentCount,
+          totalMarks: stat.totalMarks,
+          totalMaxMarks: stat.totalMaxMarks,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.averagePercentage - a.averagePercentage)
+      .slice(0, parseInt(limit));
+
+    res.json(classPerformance);
+  } catch (error) {
+    console.error('Error in getTopPerformingClasses:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== PERFORMANCE ANALYTICS ====================
+
+exports.getPerformanceAnalytics = async (req, res) => {
+  try {
+    const { examId, classId, academicYearId } = req.query;
+
+    const query = {};
+    if (examId) query.examId = examId;
+    if (classId) query.classId = classId;
+    if (academicYearId) query.academicYearId = academicYearId;
+
+    const marks = await Mark.find(query).populate('studentId', 'fullName rollNumber admissionNo');
+
+    if (marks.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          overall: { totalMarks: 0, totalMaxMarks: 0, overallPercentage: 0, totalStudents: 0 },
+          subjectPerformance: {},
+          gradeDistribution: {},
+          topPerformers: [],
+          examWisePerformance: []
+        },
+      });
+    }
+
+    const totalMarks = marks.reduce((sum, m) => sum + (m.totalMarks || 0), 0);
+    const totalMaxMarks = marks.reduce((sum, m) => sum + (m.totalMaxMarks || 0), 0);
+    const overallPercentage = totalMaxMarks > 0 ? (totalMarks / totalMaxMarks) * 100 : 0;
+
+    const subjectPerformance = {};
+    const gradeDistribution = {
+      "A+": 0, "A": 0, "B+": 0, "B": 0, "C+": 0, "C": 0, "D+": 0, "D": 0, "E": 0,
+    };
+    const studentPercentages = {};
+
+    for (const mark of marks) {
+      if (gradeDistribution[mark.grade] !== undefined) {
+        gradeDistribution[mark.grade]++;
+      }
+
+      const studentKey = mark.studentId?._id?.toString() || mark.studentId;
+      if (!studentPercentages[studentKey]) {
+        studentPercentages[studentKey] = {
+          studentName: mark.studentName,
+          studentId: studentKey,
+          totalMarks: 0,
+          totalMaxMarks: 0,
+        };
+      }
+      studentPercentages[studentKey].totalMarks += mark.totalMarks || 0;
+      studentPercentages[studentKey].totalMaxMarks += mark.totalMaxMarks || 0;
+
+      for (const subject of (mark.subjects || [])) {
+        const subjectName = subject.subjectName;
+        if (!subjectPerformance[subjectName]) {
+          subjectPerformance[subjectName] = {
+            totalMarks: 0,
+            maxMarks: 0,
+            count: 0,
+          };
+        }
+        subjectPerformance[subjectName].totalMarks += subject.totalScore || 0;
+        subjectPerformance[subjectName].maxMarks += subject.maxMarks || 0;
+        subjectPerformance[subjectName].count++;
+      }
+    }
+
+    Object.keys(subjectPerformance).forEach((subject) => {
+      const perf = subjectPerformance[subject];
+      perf.averagePercentage = perf.maxMarks > 0 ? (perf.totalMarks / perf.maxMarks) * 100 : 0;
+    });
+
+    const topPerformers = Object.values(studentPercentages)
+      .map(s => ({
+        studentId: s.studentId,
+        studentName: s.studentName,
+        percentage: s.totalMaxMarks > 0 ? (s.totalMarks / s.totalMaxMarks) * 100 : 0,
+        totalMarks: s.totalMarks,
+        totalMaxMarks: s.totalMaxMarks,
+      }))
+      .sort((a, b) => b.percentage - a.percentage)
+      .slice(0, 10);
+
+    res.json({
+      success: true,
+      data: {
+        overall: {
+          totalMarks,
+          totalMaxMarks,
+          overallPercentage,
+          totalStudents: Object.keys(studentPercentages).length,
+        },
+        subjectPerformance,
+        gradeDistribution,
+        topPerformers,
+        examWisePerformance: [],
+      },
+    });
+  } catch (error) {
+    console.error("Error in getPerformanceAnalytics:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== ATTENDANCE ANALYTICS ====================
+
+async function getAttendanceEntryProgress(targetAcademicYear, classId = null) {
+  const academicMonths = [
+    { month: 6, name: 'Jun', fullName: 'June' },
+    { month: 7, name: 'Jul', fullName: 'July' },
+    { month: 8, name: 'Aug', fullName: 'August' },
+    { month: 9, name: 'Sep', fullName: 'September' },
+    { month: 10, name: 'Oct', fullName: 'October' },
+    { month: 11, name: 'Nov', fullName: 'November' },
+    { month: 12, name: 'Dec', fullName: 'December' },
+    { month: 1, name: 'Jan', fullName: 'January' },
+    { month: 2, name: 'Feb', fullName: 'February' },
+    { month: 3, name: 'Mar', fullName: 'March' }
+  ];
+
+  const classQuery = { isActive: { $ne: false } };
+  if (classId && classId.match(/^[0-9a-fA-F]{24}$/)) {
+    classQuery._id = classId;
+  }
+
+  const allClasses = await Class.find(classQuery)
+    .populate('classTeacherId', 'name shortName shortForm')
+    .lean();
+
+  const studentCounts = await Student.aggregate([
+    { $match: { status: 'active' } },
+    { $group: { _id: '$classId', count: { $sum: 1 } } }
+  ]);
+  const studentCountMap = new Map();
+  studentCounts.forEach(sc => {
+    if (sc._id) studentCountMap.set(sc._id.toString(), sc.count);
+  });
+
+  const attGroupAgg = await Attendance.aggregate([
+    {
+      $match: {
+        academicYearId: targetAcademicYear ? targetAcademicYear._id : { $exists: true }
+      }
+    },
+    {
+      $group: {
+        _id: { classId: '$classId', month: '$month' },
+        count: { $sum: 1 },
+        totalWorkingDays: { $max: '$totalWorkingDays' }
+      }
+    }
+  ]);
+
+  const attCountMap = new Map();
+  attGroupAgg.forEach(item => {
+    if (item._id && item._id.classId) {
+      attCountMap.set(`${item._id.classId.toString()}_${item._id.month}`, {
+        count: item.count,
+        workingDays: item.totalWorkingDays || 0
+      });
+    }
+  });
+
+  const now = new Date();
+  const currentCalMonth = now.getMonth() + 1;
+  const isAcademicMonthElapsed = (m) => {
+    if (currentCalMonth >= 6) {
+      return m >= 6 && m <= currentCalMonth;
+    } else {
+      return m >= 6 || m <= currentCalMonth;
+    }
+  };
+
+  let totalClassesCount = 0;
+  let fullyCompletedClasses = 0;
+
+  const classEntryList = allClasses.map(cls => {
+    totalClassesCount++;
+    const clsIdStr = cls._id.toString();
+    const normName = (cls.displayName || `${cls.name || ''} ${cls.section || ''}`).trim();
+    const teacherShortName = resolveTeacherShortName(cls, cls.classTeacherId);
+    const teacherName = cls.classTeacherId?.name || cls.classTeacherName || '-';
+    const expectedStudents = studentCountMap.get(clsIdStr) || cls.capacity || 0;
+
+    let elapsedMonthsCount = 0;
+    let completedMonthsCount = 0;
+
+    const monthsProgress = academicMonths.map(m => {
+      const attInfo = attCountMap.get(`${clsIdStr}_${m.month}`) || { count: 0, workingDays: 0 };
+      const currentRecords = attInfo.count;
+      const isEntered = currentRecords > 0;
+      const pct = expectedStudents > 0
+        ? Math.min(100, Math.round((currentRecords / expectedStudents) * 100))
+        : (isEntered ? 100 : 0);
+
+      const isElapsed = isAcademicMonthElapsed(m.month);
+      if (isElapsed) {
+        elapsedMonthsCount++;
+        if (pct >= 80 || isEntered) {
+          completedMonthsCount++;
+        }
+      }
+
+      return {
+        month: m.month,
+        monthName: m.name,
+        monthFullName: m.fullName,
+        isEntered,
+        isElapsed,
+        currentRecords,
+        expectedRecords: expectedStudents,
+        percentage: pct,
+        workingDays: attInfo.workingDays,
+        teacherShortName
+      };
+    });
+
+    const completionPercentage = elapsedMonthsCount > 0
+      ? Math.round((completedMonthsCount / elapsedMonthsCount) * 100)
+      : (completedMonthsCount > 0 ? 100 : 0);
+
+    if (completionPercentage === 100) {
+      fullyCompletedClasses++;
+    }
+
+    return {
+      classId: clsIdStr,
+      className: normName,
+      section: cls.section || '',
+      classTeacherName: teacherName,
+      teacherShortName,
+      totalStudents: expectedStudents,
+      completionPercentage,
+      monthsProgress
+    };
+  });
+
+  classEntryList.sort((a, b) => {
+    return a.className.localeCompare(b.className, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  return {
+    totalClasses: totalClassesCount,
+    completedClasses: fullyCompletedClasses,
+    remainingClasses: totalClassesCount - fullyCompletedClasses,
+    overallCompletionPercentage: totalClassesCount > 0 ? Math.round((fullyCompletedClasses / totalClassesCount) * 100) : 0,
+    months: academicMonths,
+    classes: classEntryList
+  };
+}
+
+exports.getAttendanceAnalytics = async (req, res) => {
+  try {
+    const { classId, year, month, academicYearId } = req.query;
+
+    let targetAcademicYear = null;
+    if (academicYearId && academicYearId.match(/^[0-9a-fA-F]{24}$/)) {
+      targetAcademicYear = await AcademicYear.findById(academicYearId);
+    }
+    if (!targetAcademicYear) {
+      targetAcademicYear = await AcademicYear.findOne({ isCurrent: true });
+    }
+
+    const query = {};
+    if (targetAcademicYear) {
+      query.academicYearId = targetAcademicYear._id;
+    }
+    if (classId && classId.match(/^[0-9a-fA-F]{24}$/)) {
+      query.classId = classId;
+    }
+    if (year && !isNaN(parseInt(year, 10))) {
+      query.year = parseInt(year, 10);
+    }
+
+    const targetMonth = (month && month !== 'all' && !isNaN(parseInt(month, 10)))
+      ? parseInt(month, 10)
+      : null;
+
+    if (targetMonth) {
+      query.month = targetMonth;
+    }
+
+    const records = await Attendance.find(query)
+      .populate({
+        path: "studentId",
+        select: "fullName admissionNo rollNumber studentCode classId status gender"
+      })
+      .populate("classId", "name section displayName")
+      .lean();
+
+    const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthFullNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+    if (!records || records.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          academicYear: targetAcademicYear ? {
+            id: targetAcademicYear._id, name: targetAcademicYear.name, year: targetAcademicYear.year
+          } : null,
+          selectedMonth: targetMonth,
+          summary: {
+            totalStudents: 0, totalWorkingDays: 0, totalPresentDays: 0, totalAbsentDays: 0,
+            averagePercentage: 0, goodStandingCount: 0, goodStandingPercentage: 0,
+            needsAttentionCount: 0, criticalCount: 0, perfectCount: 0, perfectPercentage: 0
+          },
+          distribution: {
+            excellent: { category: 'Excellent', range: '≥ 90%', min: 90, max: 100, count: 0, percentage: 0, color: '#10B981' },
+            good: { category: 'Good', range: '75% - 89%', min: 75, max: 89.9, count: 0, percentage: 0, color: '#059669' },
+            average: { category: 'Average', range: '60% - 74%', min: 60, max: 74.9, count: 0, percentage: 0, color: '#F59E0B' },
+            critical: { category: 'Critical', range: '< 60%', min: 0, max: 59.9, count: 0, percentage: 0, color: '#EF4444' },
+            list: [
+              { category: 'Excellent', range: '≥ 90%', min: 90, max: 100, count: 0, percentage: 0, color: '#10B981' },
+              { category: 'Good', range: '75% - 89%', min: 75, max: 89.9, count: 0, percentage: 0, color: '#059669' },
+              { category: 'Average', range: '60% - 74%', min: 60, max: 74.9, count: 0, percentage: 0, color: '#F59E0B' },
+              { category: 'Critical', range: '< 60%', min: 0, max: 59.9, count: 0, percentage: 0, color: '#EF4444' }
+            ]
+          },
+          monthlyTrends: [],
+          classWiseComparison: [],
+          breakdown: { needsAttention: [], perfectAttendance: [], topAttendance: [], allStudents: [] },
+          entryProgress: await getAttendanceEntryProgress(targetAcademicYear, classId)
+        },
+        monthlyAttendance: [],
+        overallAttendance: 0
+      });
+    }
+
+    const studentMap = new Map();
+    const monthlyMap = new Map();
+    const classMap = new Map();
+
+    records.forEach(rec => {
+      const sId = rec.studentId?._id?.toString() || rec.studentId?.toString();
+      if (!sId) return;
+
+      const workingDays = rec.totalWorkingDays || 0;
+      const presentDays = rec.presentDays || 0;
+      const absentDays = rec.absentDays || 0;
+
+      if (!studentMap.has(sId)) {
+        const studentInfo = rec.studentId && typeof rec.studentId === 'object' ? rec.studentId : {};
+        const classInfo = rec.classId && typeof rec.classId === 'object' ? rec.classId : {};
+        const className = classInfo.displayName || `${classInfo.name || ''} ${classInfo.section || ''}`.trim() || 'Class';
+
+        const sName = studentInfo.fullName || studentInfo.name || rec.studentName || 'Student';
+        studentMap.set(sId, {
+          studentId: sId,
+          studentName: sName,
+          name: sName,
+          fullName: sName,
+          admissionNo: studentInfo.admissionNo || studentInfo.studentCode || '-',
+          rollNumber: studentInfo.rollNumber || rec.rollNumber || '-',
+          gender: studentInfo.gender || '-',
+          classId: classInfo._id?.toString() || rec.classId?.toString(),
+          className,
+          totalWorkingDays: 0,
+          presentDays: 0,
+          absentDays: 0,
+          monthsCount: 0
+        });
+      }
+
+      const st = studentMap.get(sId);
+      st.totalWorkingDays += workingDays;
+      st.presentDays += presentDays;
+      st.absentDays += absentDays;
+      st.monthsCount += 1;
+
+      const mKey = `${rec.year || 0}-${rec.month || 0}`;
+      if (!monthlyMap.has(mKey)) {
+        monthlyMap.set(mKey, {
+          year: rec.year, month: rec.month,
+          monthName: monthNames[rec.month] || `M${rec.month}`,
+          monthFullName: monthFullNames[rec.month] || `Month ${rec.month}`,
+          workingDays: workingDays, totalPresent: 0, totalPossible: 0, recordsCount: 0
+        });
+      }
+      const mData = monthlyMap.get(mKey);
+      mData.totalPresent += presentDays;
+      mData.totalPossible += workingDays;
+      mData.recordsCount += 1;
+      if (workingDays > mData.workingDays) mData.workingDays = workingDays;
+
+      const cId = (rec.classId && typeof rec.classId === 'object' ? rec.classId._id : rec.classId)?.toString();
+      if (cId) {
+        if (!classMap.has(cId)) {
+          const classInfo = rec.classId && typeof rec.classId === 'object' ? rec.classId : {};
+          const cName = classInfo.displayName || `${classInfo.name || ''} ${classInfo.section || ''}`.trim() || 'Class';
+          classMap.set(cId, {
+            classId: cId, className: cName, studentSet: new Set(),
+            totalPresent: 0, totalPossible: 0, goodStandingCount: 0, criticalCount: 0
+          });
+        }
+        const cData = classMap.get(cId);
+        cData.studentSet.add(sId);
+        cData.totalPresent += presentDays;
+        cData.totalPossible += workingDays;
+      }
+    });
+
+    const studentList = Array.from(studentMap.values()).map(st => {
+      const pct = st.totalWorkingDays > 0 ? (st.presentDays / st.totalWorkingDays) * 100 : 0;
+      let status = 'Good';
+      if (pct >= 90) status = 'Excellent';
+      else if (pct >= 75) status = 'Good';
+      else if (pct >= 60) status = 'Average';
+      else status = 'Critical';
+
+      return { ...st, percentage: parseFloat(pct.toFixed(1)), status };
+    });
+
+    const totalStudents = studentList.length;
+
+    let totalWorkingDaysSum = 0;
+    let totalPresentDaysSum = 0;
+    let goodStandingCount = 0;
+    let criticalCount = 0;
+    let needsAttentionCount = 0;
+    let perfectCount = 0;
+    let excellentCount = 0;
+    let goodCount = 0;
+    let averageCount = 0;
+
+    studentList.forEach(st => {
+      totalWorkingDaysSum += st.totalWorkingDays;
+      totalPresentDaysSum += st.presentDays;
+
+      if (st.percentage >= 100 && st.totalWorkingDays > 0) perfectCount++;
+      if (st.percentage >= 75) goodStandingCount++;
+      else needsAttentionCount++;
+
+      if (st.percentage >= 90) excellentCount++;
+      else if (st.percentage >= 75) goodCount++;
+      else if (st.percentage >= 60) averageCount++;
+      else criticalCount++;
+
+      if (st.classId && classMap.has(st.classId)) {
+        const cData = classMap.get(st.classId);
+        if (st.percentage >= 75) cData.goodStandingCount++;
+        if (st.percentage < 60) cData.criticalCount++;
+      }
+    });
+
+    const averagePercentage = totalWorkingDaysSum > 0
+      ? parseFloat(((totalPresentDaysSum / totalWorkingDaysSum) * 100).toFixed(1))
+      : 0;
+
+    const avgWorkingDays = totalStudents > 0
+      ? Math.round(totalWorkingDaysSum / totalStudents)
+      : 0;
+
+    const distributionList = [
+      { category: 'Excellent', label: 'Excellent (≥ 90%)', range: '≥ 90%', min: 90, max: 100, count: excellentCount, percentage: totalStudents > 0 ? parseFloat(((excellentCount / totalStudents) * 100).toFixed(1)) : 0, color: '#10B981' },
+      { category: 'Good', label: 'Good (75% - 89%)', range: '75% - 89%', min: 75, max: 89.9, count: goodCount, percentage: totalStudents > 0 ? parseFloat(((goodCount / totalStudents) * 100).toFixed(1)) : 0, color: '#059669' },
+      { category: 'Average', label: 'Average (60% - 74%)', range: '60% - 74%', min: 60, max: 74.9, count: averageCount, percentage: totalStudents > 0 ? parseFloat(((averageCount / totalStudents) * 100).toFixed(1)) : 0, color: '#F59E0B' },
+      { category: 'Critical', label: 'Needs Attention (< 60%)', range: '< 60%', min: 0, max: 59.9, count: criticalCount, percentage: totalStudents > 0 ? parseFloat(((criticalCount / totalStudents) * 100).toFixed(1)) : 0, color: '#EF4444' }
+    ];
+
+    const distribution = {
+      excellent: distributionList[0],
+      good: distributionList[1],
+      average: distributionList[2],
+      critical: distributionList[3],
+      list: distributionList
+    };
+
+    const academicMonthOrder = [6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5];
+    const monthlyTrends = Array.from(monthlyMap.values())
+      .map(m => {
+        const pct = m.totalPossible > 0 ? (m.totalPresent / m.totalPossible) * 100 : 0;
+        return {
+          year: m.year, month: m.month, monthName: m.monthName, monthFullName: m.monthFullName,
+          workingDays: m.workingDays, totalWorkingDays: m.workingDays,
+          totalStudents: m.recordsCount, totalPresent: m.totalPresent, totalPossible: m.totalPossible,
+          averagePercentage: parseFloat(pct.toFixed(1))
+        };
+      })
+      .sort((a, b) => {
+        const orderA = academicMonthOrder.indexOf(a.month);
+        const orderB = academicMonthOrder.indexOf(b.month);
+        if (orderA !== -1 && orderB !== -1) return orderA - orderB;
+        if (a.year !== b.year) return a.year - b.year;
+        return a.month - b.month;
+      });
+
+    const entryProgress = await getAttendanceEntryProgress(targetAcademicYear, classId);
+    const entryClassMap = new Map();
+    if (entryProgress && entryProgress.classes) {
+      entryProgress.classes.forEach(cls => {
+        if (cls.classId) entryClassMap.set(cls.classId, cls);
+      });
+    }
+
+    const classWiseComparison = Array.from(classMap.values())
+      .map(c => {
+        const pct = c.totalPossible > 0 ? (c.totalPresent / c.totalPossible) * 100 : 0;
+        const entryCls = entryClassMap.get(c.classId?.toString());
+        return {
+          classId: c.classId, className: c.className,
+          teacherShortName: entryCls?.teacherShortName || '-',
+          classTeacherName: entryCls?.classTeacherName || '',
+          totalStudents: c.studentSet.size,
+          averagePercentage: parseFloat(pct.toFixed(1)),
+          goodStandingCount: c.goodStandingCount,
+          criticalCount: c.criticalCount
+        };
+      })
+      .sort((a, b) => b.averagePercentage - a.averagePercentage);
+
+    const needsAttention = studentList
+      .filter(st => st.percentage < 75)
+      .sort((a, b) => a.percentage - b.percentage);
+
+    const perfectAttendance = studentList
+      .filter(st => st.percentage >= 100 && st.totalWorkingDays > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const topAttendance = [...studentList]
+      .sort((a, b) => b.percentage - a.percentage || b.presentDays - a.presentDays)
+      .slice(0, 25);
+
+    const allStudents = [...studentList].sort((a, b) => {
+      const rollA = parseInt(a.rollNumber, 10);
+      const rollB = parseInt(b.rollNumber, 10);
+      if (!isNaN(rollA) && !isNaN(rollB)) return rollA - rollB;
+      return a.name.localeCompare(b.name);
+    });
+
+    const summary = {
+      totalStudents,
+      totalWorkingDays: avgWorkingDays,
+      totalPresentDays: totalPresentDaysSum,
+      totalAbsentDays: totalWorkingDaysSum - totalPresentDaysSum,
+      averagePercentage,
+      goodStandingCount,
+      goodStandingPercentage: totalStudents > 0 ? parseFloat(((goodStandingCount / totalStudents) * 100).toFixed(1)) : 0,
+      needsAttentionCount,
+      needsAttentionPercentage: totalStudents > 0 ? parseFloat(((needsAttentionCount / totalStudents) * 100).toFixed(1)) : 0,
+      criticalCount,
+      criticalPercentage: totalStudents > 0 ? parseFloat(((criticalCount / totalStudents) * 100).toFixed(1)) : 0,
+      perfectCount,
+      perfectPercentage: totalStudents > 0 ? parseFloat(((perfectCount / totalStudents) * 100).toFixed(1)) : 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        academicYear: targetAcademicYear ? {
+          id: targetAcademicYear._id, name: targetAcademicYear.name, year: targetAcademicYear.year
+        } : null,
+        selectedMonth: targetMonth,
+        summary,
+        distribution,
+        monthlyTrends,
+        classWiseComparison,
+        entryProgress,
+        breakdown: { needsAttention, perfectAttendance, topAttendance, allStudents }
+      },
+      monthlyAttendance: monthlyTrends.map(t => ({
+        month: t.monthName,
+        attendancePercentage: t.averagePercentage,
+        totalWorkingDays: t.totalWorkingDays,
+        presentDays: t.totalPresent,
+        absentDays: t.totalAbsent
+      })),
+      overallAttendance: summary.averagePercentage
+    });
+  } catch (error) {
+    console.error("Error in getAttendanceAnalytics:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== STUDENT PROGRESS TREND ====================
+
+exports.getStudentProgressTrend = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { academicYearId } = req.query;
+
+    let query = { studentId };
+    if (academicYearId) query.academicYearId = academicYearId;
+
+    let marks = await Mark.find(query)
+      .populate("examId", "name term startDate")
+      .sort({ "examId.startDate": 1 });
+
+    const progressTrend = marks.map((mark) => {
+      let percentage = mark.percentage || 0;
+      return {
+        examId: mark.examId?._id,
+        examName: mark.examId?.name,
+        term: mark.examId?.term,
+        date: mark.examId?.startDate,
+        percentage: percentage,
+        grade: mark.grade,
+      };
+    });
+
+    const subjectWiseTrend = {};
+    marks.forEach((mark) => {
+      for (const subject of (mark.subjects || [])) {
+        if (!subjectWiseTrend[subject.subjectName]) {
+          subjectWiseTrend[subject.subjectName] = [];
+        }
+        subjectWiseTrend[subject.subjectName].push({
+          examName: mark.examId?.name,
+          percentage: subject.percentage || 0,
+          grade: subject.grade,
+        });
+      }
+    });
+
+    const average =
+      progressTrend.length > 0
+        ? progressTrend.reduce((sum, p) => sum + p.percentage, 0) / progressTrend.length
+        : 0;
+
+    res.json({
+      success: true,
+      data: { progressTrend, subjectWiseTrend, overallAverage: average },
+    });
+  } catch (error) {
+    console.error("Error in getStudentProgressTrend:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== REPORT CARD GENERATION ====================
+
+exports.generateReportCard = async (req, res) => {
+  try {
+    const { studentId, academicYearId } = req.params;
+
+    const student = await Student.findById(studentId).populate("classId", "name section displayName");
+    if (!student) return res.status(404).json({ message: "Student not found" });
+
+    let academicYear = null;
+    if (academicYearId) {
+      academicYear = await AcademicYear.findById(academicYearId);
+    } else {
+      academicYear = await AcademicYear.findOne({ isCurrent: true });
+    }
+
+    const exams = await Exam.find({
+      academicYearId: academicYear?._id,
+      classIds: student.classId,
+    }).sort({ term: 1, examType: 1 });
+
+    const examResults = [];
+    for (const exam of exams) {
+      const marks = await Mark.findOne({ studentId, examId: exam._id });
+      if (marks) examResults.push({ exam, marks });
+    }
+
+    const attendance = await Attendance.aggregate([
+      { $match: { studentId: student._id, academicYearId: academicYear?._id } },
+      {
+        $group: {
+          _id: null,
+          totalDays: { $sum: 1 },
+          presentDays: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
+          absentDays: { $sum: { $cond: [{ $eq: ["$status", "absent"] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const attendanceStats = attendance[0] || { totalDays: 0, presentDays: 0, absentDays: 0 };
+
+    const reportData = {
+      schoolName: "PPM HSS KOTTUKKARA",
+      schoolLogo: process.env.SCHOOL_LOGO_URL || "/uploads/logo.png",
+      academicYear: academicYear?.year || new Date().getFullYear().toString(),
+      student: {
+        name: student.fullName,
+        admissionNo: student.admissionNo,
+        rollNumber: student.rollNumber,
+        class: student.classId?.displayName || `${student.className || ""} ${student.division || ""}`.trim(),
+        dob: student.dateOfBirth ? new Date(student.dateOfBirth).toLocaleDateString() : "",
+        gender: student.gender,
+        caste: student.casteName,
+        religion: student.religion,
+        fatherName: student.fatherFullName,
+        motherName: student.motherFullName,
+        address: `${student.houseName || ""} ${student.streetName || ""} ${student.postOffice || ""}`.trim(),
+        phone: student.phoneNumber,
+        photoUrl: student.photoUrl,
+      },
+      attendance: {
+        totalDays: attendanceStats.totalDays,
+        presentDays: attendanceStats.presentDays,
+        absentDays: attendanceStats.absentDays,
+        percentage: attendanceStats.totalDays > 0
+          ? ((attendanceStats.presentDays / attendanceStats.totalDays) * 100).toFixed(1) : 0,
+      },
+      exams: [],
+    };
+
+    for (const { exam, marks } of examResults) {
+      const examData = {
+        name: exam.displayName || exam.name,
+        term: exam.term,
+        subjects: [],
+        totalMarks: marks.totalMarks,
+        totalMaxMarks: marks.totalMaxMarks,
+        percentage: marks.percentage?.toFixed(2) || "0.00",
+        grade: marks.grade,
+      };
+
+      for (const subject of (marks.subjects || [])) {
+        examData.subjects.push({
+          name: subject.subjectName,
+          code: subject.subjectCode || "",
+          totalMarks: subject.totalScore,
+          totalMax: subject.maxMarks,
+          percentage: subject.percentage,
+          grade: subject.grade,
+        });
+      }
+
+      reportData.exams.push(examData);
+    }
+
+    res.json({ success: true, data: reportData });
+  } catch (error) {
+    console.error("Report card generation error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== CLASS REPORT CARDS ====================
+
+exports.generateClassReportCards = async (req, res) => {
+  try {
+    const { classId, academicYearId } = req.params;
+
+    const students = await Student.find({ classId, status: 'active' }).sort({ rollNumber: 1, fullName: 1 });
+    if (students.length === 0) return res.status(404).json({ message: "No students found in this class" });
+
+    const academicYear = await AcademicYear.findById(academicYearId);
+    const classItem = await Class.findById(classId);
+
+    const allReportData = [];
+
+    for (const student of students) {
+      const exams = await Exam.find({ academicYearId, classIds: classId }).sort({ term: 1 });
+      const examResults = [];
+      for (const exam of exams) {
+        const marks = await Mark.findOne({ studentId: student._id, examId: exam._id });
+        if (marks) examResults.push({ exam, marks });
+      }
+
+      const attendance = await Attendance.aggregate([
+        { $match: { studentId: student._id, academicYearId } },
+        {
+          $group: {
+            _id: null,
+            totalDays: { $sum: 1 },
+            presentDays: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
+          },
+        },
+      ]);
+
+      const attendanceStats = attendance[0] || { totalDays: 0, presentDays: 0 };
+
+      const studentData = {
+        name: student.fullName,
+        admissionNo: student.admissionNo,
+        rollNumber: student.rollNumber,
+        class: classItem?.displayName || student.className,
+        exams: [],
+        attendance: {
+          totalDays: attendanceStats.totalDays,
+          presentDays: attendanceStats.presentDays,
+          percentage: attendanceStats.totalDays > 0
+            ? ((attendanceStats.presentDays / attendanceStats.totalDays) * 100).toFixed(1) : 0,
+        },
+      };
+
+      for (const { exam, marks } of examResults) {
+        const examData = {
+          name: exam.displayName || exam.name,
+          subjects: [],
+          totalMarks: marks.totalMarks,
+          percentage: marks.percentage?.toFixed(2) || "0.00",
+          grade: marks.grade,
+        };
+
+        for (const subject of (marks.subjects || [])) {
+          examData.subjects.push({
+            name: subject.subjectName,
+            totalMarks: subject.totalScore,
+            totalMax: subject.maxMarks,
+            grade: subject.grade,
+          });
+        }
+
+        studentData.exams.push(examData);
+      }
+
+      allReportData.push(studentData);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        schoolName: "PPM HSS KOTTUKKARA",
+        academicYear: academicYear?.year || "",
+        className: classItem?.displayName || "",
+        students: allReportData,
+      },
+    });
+  } catch (error) {
+    console.error("Class report cards error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== PDF GENERATION (PLACEHOLDER) ====================
+
+exports.generateReportCardPDF = async (req, res) => {
+  try {
+    const { studentId, academicYearId } = req.params;
+
+    const student = await Student.findById(studentId).populate("classId", "name section displayName");
+    if (!student) return res.status(404).json({ message: "Student not found" });
+
+    let academicYear = null;
+    if (academicYearId && academicYearId.match(/^[0-9a-fA-F]{24}$/)) {
+      academicYear = await AcademicYear.findById(academicYearId);
+    }
+    if (!academicYear) academicYear = await AcademicYear.findOne({ isCurrent: true });
+
+    const exams = await Exam.find({ academicYearId: academicYear?._id, classIds: student.classId }).sort({ term: 1 });
+    const examResults = [];
+    for (const exam of exams) {
+      const marks = await Mark.findOne({ studentId, examId: exam._id });
+      if (marks) examResults.push({ exam, marks });
+    }
+
+    const attendance = await Attendance.aggregate([
+      { $match: { studentId: student._id, academicYearId: academicYear?._id } },
+      {
+        $group: {
+          _id: null,
+          totalDays: { $sum: 1 },
+          presentDays: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const attendanceStats = attendance[0] || { totalDays: 0, presentDays: 0 };
+
+    res.json({
+      success: true,
+      message: "PDF generation not implemented yet.",
+      data: {
+        student: { name: student.fullName, admissionNo: student.admissionNo, rollNumber: student.rollNumber },
+        academicYear: academicYear?.year,
+        attendance: {
+          totalDays: attendanceStats.totalDays,
+          presentDays: attendanceStats.presentDays,
+          percentage: attendanceStats.totalDays > 0
+            ? ((attendanceStats.presentDays / attendanceStats.totalDays) * 100).toFixed(1) : 0,
+        },
+        exams: examResults.map(({ exam, marks }) => ({
+          examName: exam.displayName || exam.name,
+          percentage: marks.percentage,
+          grade: marks.grade,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Report card PDF generation error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.generateClassReportCardsPDF = async (req, res) => {
+  try {
+    const { classId, academicYearId } = req.params;
+    const students = await Student.find({ classId, status: 'active' }).limit(5);
+    const classItem = await Class.findById(classId);
+    const academicYear = await AcademicYear.findById(academicYearId);
+
+    res.json({
+      success: true,
+      message: "PDF generation not implemented yet",
+      data: {
+        className: classItem?.displayName,
+        academicYear: academicYear?.year,
+        studentCount: students.length,
+      },
+    });
+  } catch (error) {
+    console.error("Class report cards PDF error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== RECENT ACTIVITIES ====================
+
+exports.getRecentActivities = async (req, res) => {
+  try {
+    const { limit = 20, activityType, entityType, severity } = req.query;
+    
+    const query = {};
+    if (activityType) {
+      query.activityType = activityType;
+    } else {
+      query.activityType = { $ne: 'user_logout' };
+    }
+    if (entityType) query.entityType = entityType;
+    if (severity) query.severity = severity;
+    
+    const activities = await RecentActivity.find(query)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .populate('performedBy', 'name role');
+    
+    const total = await RecentActivity.countDocuments(query);
+    
+    res.json({
+      success: true,
+      data: activities,
+      pagination: { total, limit: parseInt(limit), returned: activities.length }
+    });
+  } catch (error) {
+    console.error("Error in getRecentActivities:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== SUBSCRIBE TO DASHBOARD ====================
+
+exports.subscribeDashboard = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    broadcastToUser(userId, "dashboard:subscribed", {
+      message: "Subscribed to dashboard updates",
+      timestamp: new Date(),
+    });
+
+    const totalStudents = await Student.countDocuments({ status: 'active' });
+    const totalStaff = await Staff.countDocuments({ isActive: true });
+    const totalClasses = await Class.countDocuments({ isActive: true });
+    const currentYear = await AcademicYear.findOne({ isCurrent: true });
+    const currentExams = await Exam.countDocuments({ academicYearId: currentYear?._id });
+
+    res.json({
+      success: true,
+      message: "Subscribed to dashboard updates",
+      data: { totalStudents, totalStaff, totalClasses, currentExams },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== EXPORTS ====================
+
+module.exports.broadcastDashboardUpdate = broadcastDashboardUpdate;
+module.exports.createRecentActivity = createRecentActivity;

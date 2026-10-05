@@ -1,0 +1,1080 @@
+/* eslint-disable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect, no-unused-vars */
+// src/pages/staff/StaffMarksEntry.jsx
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  BookOpenIcon,
+  AcademicCapIcon,
+  UserGroupIcon,
+  ChartBarIcon,
+  LockClosedIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
+  ArrowLeftIcon,
+  PaperAirplaneIcon,
+  DocumentArrowDownIcon,
+  CheckBadgeIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+} from "@heroicons/react/24/outline";
+import { CheckIcon } from "@heroicons/react/24/solid";
+import { fetchExams, fetchStaffExams } from "../../../store/slices/examSlice";
+import { fetchClasses } from "../../../store/slices/classSlice";
+import { fetchStaff } from "../../../store/slices/staffSlice";
+import { fetchAcademicYears } from "../../../store/slices/academicYearSlice";
+import {
+  fetchTeacherClassTeacherClasses,
+  clearTeacherClasses,
+} from "../../../store/slices/classSlice";
+
+import {
+  getMarksheetsByClass,
+  bulkUpdateMarks,
+  getTeacherPermissions,
+  submitMarksForReview,
+} from "../../../services/markService";
+
+import LoadingSpinner from "../../../components/common/LoadingSpinner.jsx";
+import toast from "react-hot-toast";
+import useDebounce from "../../../hooks/useDebounce";
+
+// ─────────────────────────────────────────────
+// Helper: compute grade label from percentage
+// ─────────────────────────────────────────────
+const getGradeInfo = (obtained, max) => {
+  const pct = max > 0 ? (obtained / max) * 100 : 0;
+  if (pct >= 90) return { grade: "A+", color: "text-emerald-600 bg-emerald-50" };
+  if (pct >= 80) return { grade: "A",  color: "text-green-600 bg-green-50" };
+  if (pct >= 70) return { grade: "B+", color: "text-blue-600 bg-blue-50" };
+  if (pct >= 60) return { grade: "B",  color: "text-cyan-600 bg-cyan-50" };
+  if (pct >= 50) return { grade: "C+", color: "text-yellow-600 bg-yellow-50" };
+  if (pct >= 40) return { grade: "C",  color: "text-orange-600 bg-orange-50" };
+  if (pct >= 30) return { grade: "D+", color: "text-amber-600 bg-amber-50" };
+  if (pct >= 20) return { grade: "D",  color: "text-red-500 bg-red-50" };
+  return { grade: "E",  color: "text-gray-500 bg-gray-100" };
+};
+
+// ─────────────────────────────────────────────
+// SubjectProgress mini-card
+// ─────────────────────────────────────────────
+const SubjectProgressCard = ({ subject }) => {
+  const pct = subject.percentage ?? 0;
+  const done = pct === 100;
+  const isSubmitted = subject.status === "submitted" || subject.status === "reviewed" || subject.status === "published";
+  return (
+    <div className={`flex-shrink-0 w-48 bg-white border ${isSubmitted ? 'border-purple-200 bg-purple-50/20' : 'border-gray-200'} rounded-xl p-3 shadow-sm`}>
+      <div className="flex items-start justify-between mb-1 gap-1">
+        <p className="text-xs font-medium text-gray-800 leading-tight line-clamp-2">
+          {subject.subjectName}
+        </p>
+        {isSubmitted ? (
+          <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-md bg-purple-100 text-purple-700 border border-purple-200 flex-shrink-0">
+            Submitted
+          </span>
+        ) : done ? (
+          <CheckBadgeIcon className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+        ) : (
+          <ClockIcon className="w-4 h-4 text-amber-400 flex-shrink-0" />
+        )}
+      </div>
+      <div className="text-xs text-gray-500 mb-1 flex items-center justify-between">
+        <span>{subject.enteredCount}/{subject.totalStudents} students</span>
+        <span className={`font-semibold ${done ? "text-emerald-600" : "text-amber-500"}`}>{pct}%</span>
+      </div>
+      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-1">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${
+            isSubmitted ? "bg-purple-500" : done ? "bg-emerald-500" : pct > 0 ? "bg-amber-400" : "bg-gray-300"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {isSubmitted && subject.submittedByName && (
+        <p className="text-[10px] text-purple-600 truncate mt-0.5" title={`Submitted by ${subject.submittedByName}`}>
+          By: {subject.submittedByName}
+        </p>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────
+const MarksEntryTable = () => {
+  const navigate = useNavigate();
+  const { examId, classId } = useParams();
+
+  const dispatch = useDispatch();
+  const { user } = useSelector((state) => state.auth);
+  const { staff, isLoading: staffLoading } = useSelector((s) => s.staff);
+  const { exams, isLoading: examsLoading } = useSelector((s) => s.exams);
+  const { teacherClassTeacherClasses, isLoading: classesLoading } = useSelector(
+    (s) => s.classes
+  );
+  const { academicYears } = useSelector((s) => s.academicYears);
+  const { classes } = useSelector((s) => s.classes);
+
+  // ── Data state ──
+  const [students, setStudents] = useState([]);
+  const [permissions, setPermissions] = useState(null);
+  const [examSubjects, setExamSubjects] = useState([]); // allowed subjects list
+  const [subjectProgress, setSubjectProgress] = useState([]); // all subjects progress
+  const [languageMapping, setLanguageMapping] = useState({});
+  const [tempMarks, setTempMarks] = useState({});
+  const [currentAcademicYear, setCurrentAcademicYear] = useState(null);
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [submittingSubjects, setSubmittingSubjects] = useState([]);
+
+  // ── Dirty tracking: only send modified students on save ──
+  const dirtyStudents = useRef(new Set());
+
+  const debouncedSearch = useDebounce(searchTerm, 300);
+
+  // ─────────────────────────────────────────
+  // Lifecycle
+  // ─────────────────────────────────────────
+  useEffect(() => {
+    loadInitialData();
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (examId && classId) {
+      loadData();
+    } else {
+      resetClassData();
+    }
+  }, [examId, classId]);
+
+  // ─────────────────────────────────────────
+  // Data Fetching
+  // ─────────────────────────────────────────
+  async function loadInitialData() {
+    setIsLoading(true);
+    try {
+      const fetchTasks = [];
+      if (classes.length === 0) fetchTasks.push(dispatch(fetchClasses({ limit: 1000 })));
+      if (academicYears.length === 0) fetchTasks.push(dispatch(fetchAcademicYears({ limit: 10 })));
+      if (fetchTasks.length > 0) await Promise.all(fetchTasks);
+    } catch (e) {
+      console.error("Failed to load initial data:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  async function loadData() {
+    if (!examId || !classId) return;
+    setIsLoading(true);
+    try {
+      const [permRes, markRes] = await Promise.all([
+        getTeacherPermissions(examId, classId),
+        getMarksheetsByClass(examId, classId),
+      ]);
+
+      setPermissions(permRes.data);
+
+      if (markRes.success && markRes.data) {
+        const { subjects, students: studentsData, languageMapping: lm, subjectProgress: sp } = markRes.data;
+
+        // Ensure teachers only see their own subjects in the entry table
+        let editableSubjects = subjects || [];
+        if (!permRes.data.isAdmin) {
+          const allowed = permRes.data.allowedSubjects || [];
+          editableSubjects = editableSubjects.filter(subj => 
+            allowed.some(s => s.subjectId === subj.examSubjectId || s.subjectId?.toString() === subj.examSubjectId?.toString())
+          );
+        }
+        setExamSubjects(editableSubjects);
+        setSubjectProgress(sp || []);
+        setStudents(studentsData || []);
+        setLanguageMapping(lm || {});
+
+        // Build tempMarks map
+        const initial = {};
+        (studentsData || []).forEach((student) => {
+          initial[student.studentId] = {};
+          (student.subjects || []).forEach((subject) => {
+            const key = subject.examSubjectId || subject.subjectId;
+            const isActuallyEntered = Boolean(
+              subject.isAbsent ||
+              subject.isEnteredExplicitly ||
+              (subject.isEntered && (
+                (subject.theoryScore !== null && subject.theoryScore !== undefined && subject.theoryScore !== "" && (subject.theoryScore > 0 || subject.isEnteredExplicitly)) ||
+                ((subject.ceScore ?? subject.ceMarks) !== null && (subject.ceScore ?? subject.ceMarks) !== undefined && (subject.ceScore ?? subject.ceMarks) > 0)
+              ))
+            );
+            initial[student.studentId][key] = {
+              theoryScore: (isActuallyEntered && !subject.isAbsent && subject.theoryScore !== null && subject.theoryScore !== undefined) ? subject.theoryScore : "",
+              practicalScore: (isActuallyEntered && !subject.isAbsent && subject.practicalScore !== null && subject.practicalScore !== undefined) ? subject.practicalScore : "",
+              ceMarks: ((subject.ceScore ?? subject.ceMarks) !== null && (subject.ceScore ?? subject.ceMarks) !== undefined) ? (subject.ceScore ?? subject.ceMarks) : "",
+              isAbsent: subject.isAbsent || false,
+              isEntered: isActuallyEntered,
+              isEnteredExplicitly: subject.isEnteredExplicitly || false,
+            };
+          });
+        });
+        setTempMarks(initial);
+
+        // Grid layout does not require an active subject.
+      }
+    } catch (e) {
+      console.error("Failed to load data:", e);
+      toast.error("Failed to load marks data");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  function resetClassData() {
+    setStudents([]);
+    setPermissions(null);
+    setExamSubjects([]);
+    setSubjectProgress([]);
+    setTempMarks({});
+    dirtyStudents.current.clear(); 
+  };
+
+  // ─────────────────────────────────────────
+  // Permission Helpers
+  // ─────────────────────────────────────────
+  const canEditSubject = useCallback(
+    (examSubjectId) => {
+      if (!permissions) return false;
+      if (permissions.isAdmin) return true;
+
+      // Check subject-level submission status
+      const subject = examSubjects.find(
+        (s) => s.examSubjectId?.toString() === examSubjectId?.toString() || s.subjectId?.toString() === examSubjectId?.toString()
+      );
+      if (subject && subject.status && subject.status !== 'draft') {
+        return false; // Subject is submitted and locked
+      }
+
+      // Check if this subject is in the allowed subjects list
+      if (permissions.allowedSubjects && permissions.allowedSubjects.length > 0) {
+        const allowed = permissions.allowedSubjects.find(
+          (s) => s.subjectId === examSubjectId || s.subjectId?.toString() === examSubjectId?.toString()
+        );
+        return allowed ? allowed.canEdit !== false : false;
+      }
+      return false;
+    },
+    [permissions, examSubjects]
+  );
+
+  const isClassTeacher = permissions?.isClassTeacher === true;
+  const isAdmin = permissions?.isAdmin === true;
+  const hasEditPermission =
+    permissions?.isAdmin === true ||
+    (permissions?.allowedSubjects && permissions.allowedSubjects.length > 0);
+
+  const allMarksEntered =
+    subjectProgress.length > 0 && subjectProgress.every((sp) => sp.percentage === 100);
+
+  // ─────────────────────────────────────────
+  // Mark Change Handler
+  // ─────────────────────────────────────────
+  const handleMarkChange = (studentId, examSubjectId, field, value) => {
+    if (!canEditSubject(examSubjectId)) {
+      toast.error("You don't have permission to edit this subject");
+      return;
+    }
+
+    const subject = examSubjects.find(
+      (s) => s.examSubjectId?.toString() === examSubjectId?.toString()
+    );
+    if (!subject) return;
+
+    let parsed = value === "" ? "" : parseInt(value, 10);
+    if (typeof parsed === "number" && !isNaN(parsed)) {
+      if (parsed < 0) parsed = 0;
+    }
+
+    // Mark this student as dirty (has unsaved changes)
+    dirtyStudents.current.add(studentId);
+
+    setTempMarks((prev) => {
+      const sm = { ...(prev[studentId] || {}) };
+      const curr = sm[examSubjectId] || { theoryScore: "", practicalScore: "", ceMarks: "", isAbsent: false, isEntered: false };
+      const nextCurr = { ...curr, [field]: parsed };
+      const isNowEntered = 
+        nextCurr.theoryScore !== "" || 
+        nextCurr.practicalScore !== "" || 
+        nextCurr.ceMarks !== "" || 
+        nextCurr.isAbsent;
+      sm[examSubjectId] = { ...nextCurr, isEntered: isNowEntered };
+      return { ...prev, [studentId]: sm };
+    });
+  };
+
+  const handleAbsentToggle = (studentId, examSubjectId) => {
+    if (!canEditSubject(examSubjectId)) {
+      toast.error("You don't have permission to edit this subject");
+      return;
+    }
+    // Mark as dirty
+    dirtyStudents.current.add(studentId);
+    setTempMarks((prev) => {
+      const sm = { ...(prev[studentId] || {}) };
+      const curr = sm[examSubjectId] || { theoryScore: 0, practicalScore: 0, ceMarks: 0, isAbsent: false };
+      const nowAbsent = !curr.isAbsent;
+      sm[examSubjectId] = {
+        ...curr,
+        isAbsent: nowAbsent,
+        theoryScore: nowAbsent ? 0 : curr.theoryScore,
+        practicalScore: nowAbsent ? 0 : curr.practicalScore,
+        ceMarks: curr.ceMarks,
+        isEntered: nowAbsent || (curr.theoryScore !== "" && curr.theoryScore !== 0) || (curr.ceMarks !== "" && curr.ceMarks !== 0),
+      };
+      return { ...prev, [studentId]: sm };
+    });
+  };
+
+  // ─────────────────────────────────────────
+  // Save Handler
+  // ─────────────────────────────────────────
+  const handleSave = async () => {
+    if (!examId || !classId) {
+      toast.error("Invalid exam or class");
+      return;
+    }
+
+    // ── Only send students that were actually changed ──
+    const isDirtyMode = dirtyStudents.current.size > 0;
+    const targetStudents = isDirtyMode
+      ? filteredStudents.filter((s) => dirtyStudents.current.has(s.studentId))
+      : filteredStudents; // fallback: send all if nothing dirty (edge case)
+
+    if (targetStudents.length === 0) {
+      toast("No changes to save.", { icon: "ℹ️" });
+      return;
+    }
+
+    // Validation: check if any entered marks exceed maximum
+    let hasValidationError = false;
+    for (const student of targetStudents) {
+      for (const subject of student.subjects) {
+        const key = subject.examSubjectId?.toString() || subject.subjectId?.toString();
+        const tm = tempMarks[student.studentId]?.[key] || {};
+        const examSubj = examSubjects.find(s => s.examSubjectId?.toString() === key || s.subjectId?.toString() === key);
+        
+        if (examSubj && !tm.isAbsent) {
+          const theoryMax = examSubj.theoryMaxMarks || examSubj.termMaxMarks || examSubj.maxMarks || 100;
+          const thScore = tm.theoryScore !== undefined ? tm.theoryScore : (subject.theoryScore ?? 0);
+          if (thScore !== "" && thScore > theoryMax) hasValidationError = true;
+
+          if (examSubj.hasPractical && examSubj.practicalMaxMarks > 0) {
+            const prScore = tm.practicalScore !== undefined ? tm.practicalScore : (subject.practicalScore ?? 0);
+            if (prScore !== "" && prScore > examSubj.practicalMaxMarks) hasValidationError = true;
+          }
+
+          if (examSubj.ceEnabled && examSubj.ceMaxMarks > 0) {
+            const ceScore = tm.ceMarks !== undefined ? tm.ceMarks : (subject.ceMarks ?? subject.ceScore ?? 0);
+            if (ceScore !== "" && ceScore > examSubj.ceMaxMarks) hasValidationError = true;
+          }
+        }
+      }
+    }
+
+    if (hasValidationError) {
+      toast.error("Please fix marks that exceed the maximum allowed before saving.");
+      return;
+    }
+
+    const studentsData = targetStudents.map((student) => ({
+      studentId: student.studentId,
+      subjects: student.subjects
+        .filter((subject) => {
+          const key = subject.examSubjectId || subject.subjectId;
+          const tm = tempMarks[student.studentId]?.[key] || {};
+          const isEnteredThisSession = tm.isAbsent ||
+            (tm.theoryScore !== "" && tm.theoryScore !== undefined && tm.theoryScore !== null) ||
+            (tm.ceMarks !== "" && tm.ceMarks !== undefined && tm.ceMarks !== null) ||
+            tm.isEnteredExplicitly;
+          return isEnteredThisSession || (subject.isEntered && (subject.theoryScore > 0 || subject.ceScore > 0 || subject.isAbsent));
+        })
+        .map((subject) => {
+          const key = subject.examSubjectId || subject.subjectId;
+          const tm = tempMarks[student.studentId]?.[key] || {};
+          const isEntered = Boolean(
+            tm.isAbsent ||
+            (tm.theoryScore !== "" && tm.theoryScore !== undefined && tm.theoryScore !== null) ||
+            (tm.ceMarks !== "" && tm.ceMarks !== undefined && tm.ceMarks !== null) ||
+            tm.isEnteredExplicitly
+          );
+          return {
+            examSubjectId: subject.examSubjectId || subject.subjectId,
+            subjectId: subject.actualSubjectId || subject.subjectId,
+            theoryScore: isEntered ? (tm.theoryScore === "" ? 0 : (Number(tm.theoryScore) || 0)) : 0,
+            practicalScore: isEntered ? (tm.practicalScore === "" ? 0 : (Number(tm.practicalScore) || 0)) : 0,
+            ceMarks: isEntered ? (tm.ceMarks === "" ? 0 : (Number(tm.ceMarks) || 0)) : 0,
+            isAbsent: tm.isAbsent ?? false,
+            isEntered: isEntered,
+            isEnteredExplicitly: isEntered,
+            remarks: subject.remarks || "",
+          };
+        }),
+      remarks: student.remarks || "",
+    }));
+
+    setIsSubmitting(true);
+    try {
+      await bulkUpdateMarks(examId, classId, studentsData);
+      toast.success(`Saved marks for ${targetStudents.length} student${targetStudents.length !== 1 ? 's' : ''}!`);
+      dirtyStudents.current.clear(); // clear dirty set after successful save
+      await loadData();
+    } catch (e) {
+      console.error("Failed to save marks:", e);
+      toast.error(e.response?.data?.message || "Failed to save marks");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenSubmitModal = () => {
+    if (!examId || !classId) return;
+    if (dirtyStudents.current.size > 0) {
+      toast.error("Please save your changes first");
+      return;
+    }
+
+    const draftAllowedSubjects = examSubjects.filter((s) => canEditSubject(s.examSubjectId));
+    if (draftAllowedSubjects.length === 0) {
+      toast.error("No editable draft subjects available to submit");
+      return;
+    }
+
+    // Check if any non-absent student has TE mark equal to 0 or missing
+    const zeroTEMarkEntries = [];
+    for (const subj of draftAllowedSubjects) {
+      const sKey = subj.examSubjectId?.toString() || subj.subjectId?.toString();
+      for (const student of students) {
+        const sid = student.studentId?.toString();
+        const tm = tempMarks[sid]?.[sKey];
+        const subjObj = (student.subjects || []).find(
+          (s) => s.examSubjectId?.toString() === sKey || s.subjectId?.toString() === sKey
+        );
+
+        const isAbsent = tm ? tm.isAbsent === true : (subjObj?.isAbsent === true);
+        const theoryScoreVal = tm ? tm.theoryScore : (subjObj?.theoryScore ?? "");
+        const tNum = theoryScoreVal === "" || theoryScoreVal === null || theoryScoreVal === undefined ? 0 : Number(theoryScoreVal);
+
+        if (!isAbsent && (tNum === 0 || isNaN(tNum))) {
+          zeroTEMarkEntries.push({
+            studentName: student.studentName || student.name || "Student",
+            rollNumber: student.rollNumber || "-",
+            subjectName: subj.displayName || subj.subjectName || "Subject",
+          });
+        }
+      }
+    }
+
+    if (zeroTEMarkEntries.length > 0) {
+      const first = zeroTEMarkEntries[0];
+      toast.error(
+        `Cannot submit for review: ${first.studentName} (Roll ${first.rollNumber}) has 0 TE marks for ${first.subjectName}. Please enter valid marks or mark as Absent.`,
+        { duration: 6000 }
+      );
+      return;
+    }
+
+    setSubmittingSubjects(draftAllowedSubjects);
+    setShowSubmitModal(true);
+  };
+
+  const handleConfirmSubmit = async () => {
+    if (submittingSubjects.length === 0) return;
+    setIsSubmitting(true);
+    setShowSubmitModal(false);
+    try {
+      const subjectIds = submittingSubjects.map((s) => s.examSubjectId || s.subjectId);
+      await submitMarksForReview(examId, classId, subjectIds.length === 1 ? subjectIds[0] : subjectIds);
+      toast.success("Subject marks submitted for review successfully");
+      await loadData();
+    } catch (e) {
+      console.error("Failed to submit:", e);
+      toast.error(e.response?.data?.message || "Failed to submit marks");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+
+  // ─────────────────────────────────────────
+  // Filtering / Helpers
+  // ─────────────────────────────────────────
+  const handleKeyDown = (e, studentIdx, subjIdx, fieldType) => {
+    if (e.key === "Enter" || e.key === "ArrowDown") {
+      e.preventDefault();
+      for (let nextIdx = studentIdx + 1; nextIdx < filteredStudents.length; nextIdx++) {
+        const nextInputId = `mark-input-${nextIdx}-${subjIdx}-${fieldType}`;
+        const nextInput = document.getElementById(nextInputId);
+        if (nextInput && !nextInput.disabled) {
+          nextInput.focus();
+          nextInput.select();
+          break;
+        }
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      for (let prevIdx = studentIdx - 1; prevIdx >= 0; prevIdx--) {
+        const prevInputId = `mark-input-${prevIdx}-${subjIdx}-${fieldType}`;
+        const prevInput = document.getElementById(prevInputId);
+        if (prevInput && !prevInput.disabled) {
+          prevInput.focus();
+          prevInput.select();
+          break;
+        }
+      }
+    }
+  };
+
+  const filteredStudents = students.filter(
+    (s) =>
+      s.studentName?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      s.rollNumber?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      s.admissionNo?.toLowerCase().includes(debouncedSearch.toLowerCase())
+  );
+
+  const getClassById = (classId) => {
+    if (typeof classId === "object" && classId !== null) return classId;
+    return classes.find((c) => c._id === classId || c.id === classId);
+  };
+
+  const getClassDisplayName = (classItem) => {
+    if (!classItem) return "Unknown";
+    if (classItem.section) return `${classItem.name} - ${classItem.section}`;
+    return classItem.displayName || classItem.name || classItem._id;
+  };
+
+  const hasValidationErrors = useMemo(() => {
+    let errorCount = 0;
+    const targetStudents = dirtyStudents.current.size > 0
+      ? filteredStudents.filter((s) => dirtyStudents.current.has(s.studentId))
+      : filteredStudents;
+
+    targetStudents.forEach(student => {
+      student.subjects.forEach(subj => {
+        const key = subj.examSubjectId || subj.subjectId;
+        const curr = tempMarks[student.studentId]?.[key];
+        if (!curr || curr.isAbsent) return;
+        
+        const theoryMax = subj.theoryMaxMarks || subj.termMaxMarks || subj.maxMarks || 100;
+        if (curr.theoryScore !== "" && curr.theoryScore > theoryMax) errorCount++;
+        if (subj.hasPractical && curr.practicalScore !== "" && curr.practicalScore > subj.practicalMaxMarks) errorCount++;
+        if (subj.ceEnabled && curr.ceMarks !== "" && curr.ceMarks > subj.ceMaxMarks) errorCount++;
+      });
+    });
+    return errorCount > 0;
+  }, [tempMarks, filteredStudents]);
+
+  // ─────────────────────────────────────────
+  // Early returns
+  // ─────────────────────────────────────────
+  if (isLoading || staffLoading || examsLoading || classesLoading) {
+    return <LoadingSpinner />;
+  }
+
+
+  // ─────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-full px-2 sm:px-6 lg:px-8 py-3 sm:py-6">
+
+        {/* ── Page Header ── */}
+        <div className="flex items-center gap-3 mb-5">
+          <button
+            onClick={() => navigate("..")}
+            className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-white border border-transparent hover:border-gray-200 transition-all"
+          >
+            <ArrowLeftIcon className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Marks Entry</h1>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {user?.role === 'admin'
+                ? "Admin – Enter marks for any class and subject"
+                : hasEditPermission
+                ? "Enter & save marks, then click Submit for Review when finished."
+                : "View Only"}
+            </p>
+          </div>
+        </div>
+
+        {/* ── Content Area ── */}
+        {examId && classId && (
+          <>
+            {/* ── Subject Progress Panel ── */}
+            {subjectProgress.length > 0 && (
+              <div className="mb-4">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <ChartBarIcon className="w-4 h-4 text-gray-500" />
+                  <h2 className="text-sm font-semibold text-gray-700">Class Progress</h2>
+                  <span className="ml-auto text-xs text-gray-400">
+                    {subjectProgress.filter((sp) => sp.percentage === 100).length}/
+                    {subjectProgress.length} subjects complete
+                  </span>
+                </div>
+                <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                  {subjectProgress.map((sp) => (
+                    <div key={sp.subjectId?.toString()} className="snap-start">
+                      <SubjectProgressCard subject={sp} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+
+            {/* ── No Subjects ── */}
+            {examSubjects.length === 0 && !isLoading && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6 sm:p-8 text-center">
+                <LockClosedIcon className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">
+                  No subjects available
+                </h3>
+                <p className="text-xs text-gray-500">
+                  You are not assigned to any subject for this class in this exam.
+                </p>
+              </div>
+            )}
+
+            {/* ── Grid Table Section ── */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-4">
+              {/* Search + Save bar */}
+              <div className="px-4 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-gray-900 flex flex-wrap items-center gap-2">
+                    <BookOpenIcon className="w-4 h-4 text-emerald-600" />
+                    Marks Entry Grid
+                    {!hasEditPermission && (
+                      <span className="ml-1 inline-flex items-center gap-1 text-xs text-gray-400">
+                        <LockClosedIcon className="w-3 h-3" /> View Only
+                      </span>
+                    )}
+                    {permissions?.classStatus && permissions.classStatus !== 'draft' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                        <LockClosedIcon className="w-3 h-3 text-amber-600" /> 
+                        {permissions.classStatus === 'submitted' ? 'Submitted for Review' : permissions.classStatus === 'reviewed' ? 'Reviewed by Admin' : permissions.classStatus}
+                      </span>
+                    )}
+                  </h2>
+                </div>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <div className="relative">
+                    <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search student…"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-8 pr-7 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 w-40 sm:w-48"
+                    />
+                    {searchTerm && (
+                      <button
+                        onClick={() => setSearchTerm("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                      >
+                        <XMarkIcon className="w-3.5 h-3.5 text-gray-400" />
+                      </button>
+                    )}
+                  </div>
+                  {hasEditPermission && (
+                    <button
+                      onClick={handleSave}
+                      disabled={isSubmitting || hasValidationErrors}
+                      className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap shadow-sm"
+                      title="Save marks in draft mode"
+                    >
+                      <CheckIcon className="w-3.5 h-3.5" />
+                      {isSubmitting ? "Saving…" : "Save Draft"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Scrollable Table */}
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th rowSpan={2} className="sticky left-0 bg-gray-50 z-20 px-4 py-3 text-center text-xs font-semibold text-gray-600 whitespace-nowrap border-r border-gray-200">
+                        Roll No
+                      </th>
+                      <th rowSpan={2} className="bg-gray-50 px-4 py-3 text-left text-xs font-semibold text-gray-600 whitespace-nowrap min-w-[200px] border-r border-gray-200">
+                        Student
+                      </th>
+                      {examSubjects.map((subj) => {
+                        const hasPrac = false;
+                        const hasCE = subj.ceEnabled && subj.ceMaxMarks > 0;
+                        let colSpan = 1; // TE
+                        if (hasPrac) colSpan++;
+                        if (hasCE) colSpan++;
+                        colSpan += 3; // Total, Grade, Absent
+                        return (
+                          <th
+                            key={subj.examSubjectId}
+                            colSpan={colSpan}
+                            className="px-3 py-2 text-center text-xs font-bold text-gray-700 whitespace-nowrap border-r border-gray-200"
+                          >
+                            {subj.displayName || subj.subjectName}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      {examSubjects.map((subj) => {
+                        const hasPrac = false;
+                        const hasCE = subj.ceEnabled && subj.ceMaxMarks > 0;
+                        const theoryMax = subj.theoryMaxMarks || subj.termMaxMarks || subj.maxMarks || 100;
+                        return (
+                          <React.Fragment key={subj.examSubjectId}>
+                            {hasCE && (
+                              <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-500 whitespace-nowrap border-l border-gray-200">
+                                CE <span className="text-gray-400">/{subj.ceMaxMarks}</span>
+                              </th>
+                            )}
+                            <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-500 whitespace-nowrap border-l border-gray-200">
+                                TE <span className="text-gray-400">/{theoryMax}</span>
+                            </th>
+                            {hasPrac && (
+                              <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-500 whitespace-nowrap border-l border-gray-200">
+                                PR <span className="text-gray-400">/{subj.practicalMaxMarks}</span>
+                              </th>
+                            )}
+                            <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-700 whitespace-nowrap border-l border-gray-200 bg-gray-100/50">
+                              Total with % <span className="text-gray-400">/{subj.maxMarks || 100}</span>
+                            </th>
+                            <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-700 whitespace-nowrap border-l border-gray-200 bg-gray-100/50">
+                              Grade
+                            </th>
+                            <th className="px-2 py-2 text-center text-[10px] font-semibold text-red-500 whitespace-nowrap border-l border-r border-gray-200 bg-red-50/30">
+                              Absent
+                            </th>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredStudents.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={2 + examSubjects.length * 5}
+                          className="text-center py-6 sm:py-10 text-gray-400 text-sm"
+                        >
+                          No students found.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredStudents.map((student, idx) => (
+                        <tr
+                          key={student.studentId}
+                          className={`${
+                            idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"
+                          } hover:bg-emerald-50/40 transition-colors`}
+                        >
+                          {/* Roll No (sticky) */}
+                          <td className={`sticky left-0 z-10 px-4 py-2 text-center text-xs font-bold text-gray-900 border-r border-gray-200 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
+                            {student.rollNumber || "-"}
+                          </td>
+                          
+                          {/* Student Name */}
+                          <td className={`px-4 py-2 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"} hover:bg-emerald-50 border-r border-gray-200`}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-[10px] flex-shrink-0">
+                                {idx + 1}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-gray-900 whitespace-normal min-w-[150px]">
+                                  {student.studentName}
+                                </p>
+                                <p className="text-[10px] text-gray-400">
+                                  Adm No: {student.admissionNo || student.studentCode || "-"}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Subjects Mapping */}
+                          {examSubjects.map((subj, subjIdx) => {
+                            const key = subj.examSubjectId?.toString();
+                            const canEdit = canEditSubject(key);
+                            const tm = tempMarks[student.studentId]?.[key] || {};
+                            const theory = tm.theoryScore !== undefined ? tm.theoryScore : (subj.isEntered ? (subj.theoryScore ?? 0) : "");
+                            const practical = tm.practicalScore !== undefined ? tm.practicalScore : (subj.isEntered ? (subj.practicalScore ?? 0) : "");
+                            const ce = tm.ceMarks !== undefined ? tm.ceMarks : (subj.isEntered ? (subj.ceScore ?? subj.ceMarks ?? 0) : "");
+                            const absent = tm.isAbsent ?? false;
+                            const ceNum = ce === "" ? 0 : Number(ce);
+                            const theoryNum = (absent || theory === "") ? 0 : Number(theory);
+                            const practicalNum = (absent || practical === "") ? 0 : Number(practical);
+                            const total = theoryNum + practicalNum + ceNum;
+                            const maxM = subj.maxMarks || 100;
+                            const gradeInfo = getGradeInfo(total, maxM);
+                            const theoryMax = subj.theoryMaxMarks || subj.termMaxMarks || subj.maxMarks || 100;
+                            const hasPrac = false;
+                            const hasCE = subj.ceEnabled && subj.ceMaxMarks > 0;
+
+                            const isTheoryError = theory !== "" && theory > theoryMax;
+                            const isPracticalError = hasPrac && practical !== "" && practical > subj.practicalMaxMarks;
+                            const isCeError = hasCE && ce !== "" && ce > subj.ceMaxMarks;
+
+                            const getBaseInputClass = (isError) => `w-14 text-center px-1 py-1 text-xs border rounded focus:outline-none focus:ring-1 transition-colors font-mono ${
+                              !canEdit || absent
+                                ? "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed"
+                                : isError 
+                                  ? "bg-red-50 border-red-500 text-red-900 focus:ring-red-400"
+                                  : "bg-white border-gray-300 hover:border-emerald-300 text-gray-900 focus:ring-emerald-400 font-semibold"
+                            }`;
+
+                            return (
+                              <React.Fragment key={key}>
+                                {/* CE */}
+                                {hasCE && (
+                                  <td className="px-1 py-1 text-center border-l border-gray-200">
+                                    <input
+                                      type="number" onWheel={(e) => e.target.blur()}
+                                      value={ce}
+                                      onChange={(e) => handleMarkChange(student.studentId, key, "ceMarks", e.target.value)}
+                                      onKeyDown={(e) => handleKeyDown(e, idx, subjIdx, "ceMarks")}
+                                      disabled={!canEdit}
+                                      min={0}
+                                      max={subj.ceMaxMarks}
+                                      placeholder="0"
+                                      id={`mark-input-${idx}-${subjIdx}-ceMarks`}
+                                      className={`w-14 text-center px-1 py-1 text-xs border rounded focus:outline-none focus:ring-1 transition-colors font-mono ${
+                                        !canEdit
+                                          ? "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed"
+                                          : isCeError 
+                                            ? "bg-red-50 border-red-500 text-red-900 focus:ring-red-400"
+                                            : "bg-white border-gray-300 hover:border-emerald-300 text-gray-900 focus:ring-emerald-400 font-semibold"
+                                      }`}
+                                    />
+                                  </td>
+                                )}
+
+                                {/* TE (Theory) */}
+                                <td className="px-1 py-1 text-center border-l border-gray-200">
+                                  <input
+                                    type="number" onWheel={(e) => e.target.blur()}
+                                    value={absent ? "" : theory}
+                                    onChange={(e) => handleMarkChange(student.studentId, key, "theoryScore", e.target.value)}
+                                    onKeyDown={(e) => handleKeyDown(e, idx, subjIdx, "theoryScore")}
+                                    disabled={!canEdit || absent}
+                                    min={0}
+                                    max={theoryMax}
+                                    placeholder="0"
+                                    id={`mark-input-${idx}-${subjIdx}-theoryScore`}
+                                    className={getBaseInputClass(isTheoryError)}
+                                  />
+                                </td>
+                                
+                                {/* Practical */}
+                                {hasPrac && (
+                                  <td className="px-1 py-1 text-center border-l border-gray-200">
+                                    <input
+                                      type="number" onWheel={(e) => e.target.blur()}
+                                      value={absent ? "" : practical}
+                                      onChange={(e) => handleMarkChange(student.studentId, key, "practicalScore", e.target.value)}
+                                      onKeyDown={(e) => handleKeyDown(e, idx, subjIdx, "practicalScore")}
+                                      disabled={!canEdit || absent}
+                                      min={0}
+                                      max={subj.practicalMaxMarks}
+                                      placeholder="0"
+                                      id={`mark-input-${idx}-${subjIdx}-practicalScore`}
+                                      className={getBaseInputClass(isPracticalError)}
+                                    />
+                                  </td>
+                                )}
+
+                                {/* Total and % */}
+                                <td className="px-2 py-1 text-center border-l border-gray-200 bg-gray-50/50">
+                                  {absent && total === 0 ? (
+                                    <span className="text-red-500 font-bold text-xs">AB</span>
+                                  ) : (
+                                    <div className="flex flex-col items-center">
+                                      <span className="text-xs font-bold font-mono text-gray-900">
+                                        {total}
+                                      </span>
+                                      <span className="text-[9px] text-gray-500">
+                                        {maxM > 0 ? Math.round((total / maxM) * 100) : 0}%
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+
+                                {/* Grade */}
+                                <td className="px-2 py-1 text-center border-l border-gray-200 bg-gray-50/50">
+                                  {absent && total === 0 ? (
+                                    <span className="text-xs font-bold font-mono text-red-500">AB</span>
+                                  ) : (
+                                    <span className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded-md ${gradeInfo.color}`}>
+                                      {gradeInfo.grade}
+                                    </span>
+                                  )}
+                                </td>
+
+                                {/* Absent Toggle */}
+                                <td className="px-1 py-1 text-center border-l border-r border-gray-200 bg-red-50/20">
+                                  {canEdit && (
+                                    <button
+                                      onClick={() => handleAbsentToggle(student.studentId, key)}
+                                      title={absent ? "Mark Present" : "Mark Absent"}
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded transition-all ${
+                                        absent
+                                          ? "bg-red-500 text-white shadow-sm"
+                                          : "bg-gray-100 text-gray-400 hover:bg-red-100 hover:text-red-500"
+                                      }`}
+                                    >
+                                      {absent ? "AB" : "AB"}
+                                    </button>
+                                  )}
+                                  {!canEdit && absent && (
+                                    <span className="text-red-500 font-bold text-xs">AB</span>
+                                  )}
+                                </td>
+                              </React.Fragment>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Table Footer Summary */}
+              {filteredStudents.length > 0 && (
+                <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
+                  <span>{filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}</span>
+                </div>
+              )}
+            </div>
+
+            {/* ── Sticky Save Footer ── */}
+            <div className="sticky bottom-3 mt-4 flex items-center justify-between gap-2 p-2 bg-white/95 backdrop-blur-md border border-gray-200 shadow-xl rounded-2xl z-30 max-w-2xl mx-auto">
+              {hasEditPermission && filteredStudents.length > 0 && (
+                <button
+                  onClick={handleSave}
+                  disabled={isSubmitting || hasValidationErrors}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-bold bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 disabled:opacity-50 shadow-sm transition-all active:scale-95"
+                >
+                  <CheckIcon className="w-4 h-4" />
+                  <span>{isSubmitting ? "Saving…" : "Save Draft"}</span>
+                </button>
+              )}
+              {permissions?.canSubmit ? (
+                <button
+                  onClick={handleOpenSubmitModal}
+                  disabled={isSubmitting}
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-4 text-xs sm:text-sm font-bold bg-amber-500 text-white rounded-xl hover:bg-amber-600 disabled:opacity-50 shadow-sm transition-all active:scale-95 whitespace-nowrap"
+                >
+                  <PaperAirplaneIcon className="w-4 h-4" />
+                  <span>Submit for Review</span>
+                </button>
+              ) : (permissions?.classStatus === 'submitted' || permissions?.classStatus === 'reviewed') ? (
+                <div className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 rounded-xl whitespace-nowrap">
+                  <CheckBadgeIcon className="w-4 h-4 text-amber-600" />
+                  <span>Submitted ({permissions.classStatus})</span>
+                </div>
+              ) : null}
+            </div>
+
+            {/* ── No Edit Permission State ── */}
+            {!hasEditPermission && examSubjects.length > 0 && !isLoading && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6 sm:p-8 text-center mt-4">
+                <LockClosedIcon className="w-12 h-12 text-gray-200 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">View Only Mode</h3>
+                <p className="text-xs text-gray-500">
+                  You don't have permission to edit marks for this exam.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
+
+      {/* ── Warning Confirmation Modal ── */}
+      {showSubmitModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100 transform transition-all scale-100">
+            <div className="flex items-start gap-4 mb-4">
+              <div className="p-3 bg-amber-100 text-amber-600 rounded-2xl flex-shrink-0">
+                <ExclamationTriangleIcon className="w-7 h-7" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Submit Marks for Review?</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  You are about to submit marks for the following subject(s):
+                </p>
+              </div>
+            </div>
+
+            {/* Subject list badges */}
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3.5 mb-5 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                {submittingSubjects.map((s) => (
+                  <span
+                    key={s.examSubjectId || s.subjectId}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-white text-amber-900 border border-amber-200 shadow-2xs"
+                  >
+                    <BookOpenIcon className="w-3.5 h-3.5 text-amber-600" />
+                    {s.displayName || s.subjectName}
+                  </span>
+                ))}
+              </div>
+              <ul className="text-xs text-amber-800 space-y-1.5 pt-2 border-t border-amber-200/60">
+                <li className="flex items-start gap-1.5">
+                  <LockClosedIcon className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <span>Marks will be <strong>locked for editing</strong> by staff after submission.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <PaperAirplaneIcon className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <span>Status will change to <strong>Submitted</strong> for admin review.</span>
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2.5 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSubmit}
+                disabled={isSubmitting}
+                className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+              >
+                {isSubmitting ? (
+                  "Submitting…"
+                ) : (
+                  <>
+                    <PaperAirplaneIcon className="w-4 h-4" />
+                    <span>Submit Marks</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      </div>
+    </div>
+  );
+};
+
+export default MarksEntryTable;

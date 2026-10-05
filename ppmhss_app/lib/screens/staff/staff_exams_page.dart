@@ -1,0 +1,533 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_redux/flutter_redux.dart';
+import 'package:intl/intl.dart';
+import 'package:school_management/actions/exam_actions.dart';
+import 'package:school_management/actions/class_actions.dart';
+import 'package:school_management/models/exam_model.dart';
+import 'package:school_management/store/app_state.dart';
+import 'package:school_management/utils/theme.dart';
+import 'package:school_management/widgets/common/loading_widget.dart';
+import 'package:school_management/widgets/common/error_widget.dart';
+import 'package:school_management/screens/staff/staff_marks_entry.dart';
+import 'package:school_management/screens/staff/staff_exam_form.dart';
+import 'package:school_management/screens/staff/class_marks_overview.dart';
+
+class StaffExamsPage extends StatefulWidget {
+  final String classId;
+  final String className;
+
+  const StaffExamsPage({
+    super.key,
+    required this.classId,
+    required this.className,
+  });
+
+  @override
+  State<StaffExamsPage> createState() => _StaffExamsPageState();
+}
+
+class _StaffExamsPageState extends State<StaffExamsPage> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+  }
+
+  Future<void> _loadData() async {
+    final store = StoreProvider.of<AppState>(context, listen: false);
+    await store.dispatch(fetchTeacherExamsThunk());
+    await store.dispatch(fetchTeacherClassesThunk());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        title: Text(
+          widget.className.isNotEmpty
+              ? 'Exams - ${widget.className}'
+              : 'Exams',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        centerTitle: false,
+        elevation: 0,
+        backgroundColor: AppTheme.primaryColor,
+        foregroundColor: Colors.white,
+        actions: const [],
+      ),
+      body: StoreConnector<AppState, _ExamViewModel>(
+        converter: (store) {
+          final allExams = store.state.exams.exams;
+          final filteredExams = allExams.where((exam) {
+            final currentUserId = store.state.auth.user?.id;
+            final currentStaffId = store.state.auth.user?.staffId;
+            
+            // If they created the exam, allow
+            if (currentUserId != null && exam.createdBy == currentUserId) return true;
+            
+            // Check if they have a role in any of the exam's classes
+            if (exam.classIds == null || exam.classIds!.isEmpty) return false;
+            
+            final teacherClasses = store.state.classes.teacherClasses;
+            bool hasRoleInExam = false;
+            
+            for (var c in exam.classIds!) {
+              final cId = (c is Map) ? (c['_id'] ?? c['id']) : c.toString();
+              
+              // If we are filtering by a specific class, skip others
+              if (widget.classId.isNotEmpty && cId != widget.classId) continue;
+              
+              final tcList = teacherClasses.where((t) => t.id == cId).toList();
+              if (tcList.isEmpty) continue;
+              
+              final tc = tcList.first;
+              
+              if (currentStaffId != null) {
+                final String currentStaffIdStr = currentStaffId.toString();
+                
+                // Allow if they are the class teacher
+                if (tc.classTeacherId == currentStaffIdStr) {
+                  hasRoleInExam = true;
+                  break;
+                }
+                
+                // If they are a subject teacher, check if their subject is in the exam
+                if (tc.subjectTeachers != null && tc.subjectTeachers!.isNotEmpty) {
+                  final theirSubjects = tc.subjectTeachers!.where((st) {
+                    if (st == null) return false;
+                    final tId = (st['teacherId'] is Map) ? st['teacherId']['_id'] : st['teacherId'];
+                    return tId?.toString() == currentStaffIdStr;
+                  }).map((e) {
+                    final s = (e['subjectId'] is Map) ? e['subjectId']['_id'] : e['subjectId'];
+                    return s?.toString();
+                  }).where((id) => id != null).toList();
+                  
+                  final examSubjectIds = exam.subjects?.map((s) {
+                    if (s == null) return null;
+                    final sId = (s is Map) ? s['subjectId'] : s;
+                    final id = (sId is Map) ? sId['_id'] : sId;
+                    return id?.toString();
+                  }).where((id) => id != null).toList() ?? [];
+                  
+                  final hasMatchingSubject = theirSubjects.any((tsId) => examSubjectIds.contains(tsId));
+                  if (hasMatchingSubject) {
+                    hasRoleInExam = true;
+                    break;
+                  }
+                }
+              }
+            }
+            
+            return hasRoleInExam;
+          }).toList();
+              
+          return _ExamViewModel(
+            exams: filteredExams,
+            isLoading: store.state.exams.isLoading || store.state.classes.isLoading,
+            error: store.state.exams.error ?? store.state.classes.error,
+            teacherClasses: store.state.classes.teacherClasses,
+            currentUserId: store.state.auth.user?.id ?? store.state.auth.user?.staffId,
+          );
+        },
+        builder: (context, vm) {
+          if (vm.isLoading && vm.exams.isEmpty) {
+            return const Center(child: LoadingWidget());
+          }
+
+          if (vm.error != null && vm.exams.isEmpty) {
+            return Center(
+              child: CustomErrorWidget(
+                  message: vm.error!, onRetry: _loadData),
+            );
+          }
+
+          if (vm.exams.isEmpty) {
+            return _buildEmptyState();
+          }
+
+          return RefreshIndicator(
+            onRefresh: _loadData,
+            color: AppTheme.primaryColor,
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 95),
+              itemCount: vm.exams.length,
+              itemBuilder: (context, index) =>
+                  _buildExamCard(vm.exams[index], vm.teacherClasses, vm.currentUserId),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildExamCard(ExamModel exam, List<dynamic> teacherClasses, String? currentUserId) {
+    final statusColor = _statusColor(exam.overallStatus);
+    final dateRange =
+        '${DateFormat('d MMM').format(exam.startDate)} – ${DateFormat('d MMM yyyy').format(exam.endDate)}';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.quiz_outlined,
+                      color: AppTheme.primaryColor, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        exam.displayName ?? exam.name,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 16),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        dateRange,
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+                // Status badge
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    _statusLabel(exam.overallStatus),
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: statusColor),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[100]),
+            const SizedBox(height: 8),
+            // Metadata row
+            Row(
+              children: [
+                _buildMeta(Icons.category_outlined,
+                    exam.examType.toUpperCase()),
+                const SizedBox(width: 16),
+                _buildMeta(Icons.school_outlined, exam.term.toUpperCase()),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Action buttons
+            Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _onEnterMarksTapped(context, exam, teacherClasses, currentUserId),
+                        icon: const Icon(Icons.edit_note, size: 18),
+                        label: const Text('Enter Marks'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primaryColor,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                    ),
+                    if (currentUserId != null && exam.createdBy == currentUserId) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => StaffExamFormPage(
+                                  classId: widget.classId,
+                                  className: widget.className,
+                                  existingExam: exam,
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.edit, size: 18),
+                          label: const Text('Edit Exam'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.primaryColor,
+                            side: const BorderSide(color: AppTheme.primaryColor),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ClassMarksOverviewPage(
+                            classId: widget.classId,
+                            className: widget.className,
+                            examId: exam.id,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+                    label: const Text('View Class Marks'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF7C3AED),
+                      side: const BorderSide(color: Color(0xFF7C3AED)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMeta(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: Colors.grey[500]),
+        const SizedBox(width: 4),
+        Text(text,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.quiz_outlined, size: 64, color: Colors.grey[300]),
+          const SizedBox(height: 16),
+          const Text('No Exams Found',
+              style:
+                  TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text(
+            'No exams have been scheduled yet.',
+            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'published':
+      case 'active':
+        return Colors.green;
+      case 'completed':
+        return Colors.blue;
+      case 'draft':
+        return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _statusLabel(String status) {
+    return status[0].toUpperCase() + status.substring(1);
+  }
+
+  void _onEnterMarksTapped(BuildContext context, ExamModel exam, List<dynamic> teacherClasses, String? currentUserId) {
+    String targetClassId = widget.classId;
+    String targetClassName = widget.className;
+    
+    // We need the staff ID for class and subject matching
+    final store = StoreProvider.of<AppState>(context, listen: false);
+    final currentStaffId = store.state.auth.user?.staffId;
+
+    if (targetClassId.isEmpty && exam.classIds != null && exam.classIds!.isNotEmpty) {
+      // Filter exam.classIds by teacherClasses AND ensure they have a valid role in the exam for that class
+      final assignedClassIds = exam.classIds!.where((c) {
+        final cId = (c is Map) ? (c['_id'] ?? c['id']) : c.toString();
+        
+        final tcList = teacherClasses.where((t) => t.id == cId).toList();
+        if (tcList.isEmpty) return false;
+        final tc = tcList.first;
+        
+        if (currentStaffId != null) {
+          final String currentStaffIdStr = currentStaffId.toString();
+          
+          if (tc.classTeacherId == currentStaffIdStr) return true;
+          
+          // Allow if they are a subject teacher for a subject that is in this exam
+          if (tc.subjectTeachers != null && tc.subjectTeachers!.isNotEmpty) {
+            final theirSubjects = tc.subjectTeachers!.where((st) {
+              if (st == null) return false;
+              final tId = (st['teacherId'] is Map) ? st['teacherId']['_id'] : st['teacherId'];
+              return tId?.toString() == currentStaffIdStr;
+            }).map((e) {
+              final s = (e['subjectId'] is Map) ? e['subjectId']['_id'] : e['subjectId'];
+              return s?.toString();
+            }).where((id) => id != null).toList();
+            
+            final examSubjectIds = exam.subjects?.map((s) {
+              if (s == null) return null;
+              final sId = (s is Map) ? s['subjectId'] : s;
+              final id = (sId is Map) ? sId['_id'] : sId;
+              return id?.toString();
+            }).where((id) => id != null).toList() ?? [];
+            
+            final hasMatchingSubject = theirSubjects.any((tsId) => examSubjectIds.contains(tsId));
+            if (hasMatchingSubject) return true;
+          }
+        }
+        
+        return false;
+      }).toList();
+
+      if (assignedClassIds.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('You are not assigned to any subjects for this exam.')));
+        return;
+      }
+
+      if (assignedClassIds.length == 1) {
+        final c = assignedClassIds[0];
+        targetClassId = (c is Map) ? (c['_id'] ?? c['id'] ?? '') : c.toString();
+        targetClassName = (c is Map) ? (c['displayName'] ?? (c['section'] != null ? '${c['name']} - ${c['section']}' : c['name']) ?? 'Class') : 'Class';
+        _navigateToMarksEntry(context, exam, targetClassId, targetClassName);
+      } else {
+        _showClassSelectionSheet(context, exam, assignedClassIds);
+      }
+    } else {
+      _navigateToMarksEntry(context, exam, targetClassId, targetClassName);
+    }
+  }
+
+  void _navigateToMarksEntry(BuildContext context, ExamModel exam, String classId, String className) {
+    if (classId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a class first.')));
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StaffMarksEntryPage(
+          classId: classId,
+          className: className,
+          examId: exam.id,
+          examName: exam.displayName ?? exam.name,
+        ),
+      ),
+    );
+  }
+
+  void _showClassSelectionSheet(BuildContext context, ExamModel exam, List<dynamic> assignedClassIds) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Select Class for Marks Entry', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: assignedClassIds.length,
+                    itemBuilder: (ctx, i) {
+                      final c = assignedClassIds[i];
+                      final cId = (c is Map) ? (c['_id'] ?? c['id'] ?? '') : c.toString();
+                      final cName = (c is Map) 
+                          ? (c['displayName'] ?? (c['section'] != null ? '${c['name']} - ${c['section']}' : c['name']) ?? 'Class') 
+                          : 'Class';
+                    return ListTile(
+                      title: Text(cName),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _navigateToMarksEntry(context, exam, cId, cName);
+                      },
+                    );
+                  },
+                ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ExamViewModel {
+  final List<ExamModel> exams;
+  final bool isLoading;
+  final String? error;
+  final List<dynamic> teacherClasses;
+  final String? currentUserId;
+
+  _ExamViewModel({
+    required this.exams,
+    required this.isLoading,
+    this.error,
+    this.teacherClasses = const [],
+    this.currentUserId,
+  });
+}

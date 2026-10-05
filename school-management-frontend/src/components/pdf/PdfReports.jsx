@@ -1,0 +1,858 @@
+// src/components/reports/PdfReports.jsx
+import React, { useState, useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import {
+  CakeIcon,
+  BuildingLibraryIcon,
+  AcademicCapIcon,
+  ClipboardDocumentListIcon,
+  BanknotesIcon,
+  UserIcon,
+  ChartBarIcon,
+  TrophyIcon,
+  EyeIcon,
+  ArrowDownTrayIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  DocumentTextIcon,
+  CheckCircleIcon
+} from '@heroicons/react/24/outline';
+import { fetchClasses } from '../../store/slices/classSlice';
+import { fetchAcademicYears } from '../../store/slices/academicYearSlice';
+import { fetchStudents } from '../../store/slices/studentSlice';
+import { fetchStaff } from '../../store/slices/staffSlice';
+import { fetchExams } from '../../store/slices/examSlice';
+import pdfService, { downloadPDF } from '../../services/pdfService';
+import LoadingSpinner from '../common/LoadingSpinner';
+import toast from 'react-hot-toast';
+import AsyncSelect from 'react-select/async';
+import studentService from '../../services/studentService';
+
+const ReportCard = ({ title, description, children }) => (
+  <div className="bg-white rounded-lg border border-gray-200">
+    <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+          <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+        </div>
+      </div>
+    </div>
+    <div className="p-4">{children}</div>
+  </div>
+);
+
+const ActionButtons = ({ onDownload, downloadDisabled, isLoading }) => (
+  <div className="flex gap-2">
+    <button
+      onClick={onDownload}
+      disabled={downloadDisabled || isLoading}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+    >
+      {isLoading ? (
+        <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+      ) : (
+        <ArrowDownTrayIcon className="w-4 h-4" />
+      )}
+      <span className="hidden sm:inline">{isLoading ? 'Loading...' : 'Download'}</span>
+    </button>
+  </div>
+);
+
+const PdfReports = () => {
+  const dispatch = useDispatch();
+  const { classes } = useSelector((state) => state.classes);
+  const { academicYears } = useSelector((state) => state.academicYears);
+  const { students } = useSelector((state) => state.students);
+  const { staff } = useSelector((state) => state.staff);
+  const { exams } = useSelector((state) => state.exams);
+  
+  const [activeCategory, setActiveCategory] = useState('noon-meal');
+  const [selectedClass, setSelectedClass] = useState('');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedExam, setSelectedExam] = useState('');
+  const [selectedStaff, setSelectedStaff] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [selectedStatus, setSelectedStatus] = useState('');
+  const [selectedDistributionType, setSelectedDistributionType] = useState('');
+  const [marklistAcademicYear, setMarklistAcademicYear] = useState('');
+  const [certificateAcademicYear, setCertificateAcademicYear] = useState('');
+  const [abstractAcademicYear, setAbstractAcademicYear] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reportStation, setReportStation] = useState('KOTTUKKARA');
+  const [certificateDate, setCertificateDate] = useState(new Date().toLocaleDateString('en-IN'));
+  const [certificatePlace, setCertificatePlace] = useState('Kottukkara');
+  const [workingDays, setWorkingDays] = useState(25);
+  const [expandedSections, setExpandedSections] = useState({});
+  const [sportsCategory, setSportsCategory] = useState('auto');
+  const [sportsGender, setSportsGender] = useState('all');
+  const [sportsHouse, setSportsHouse] = useState('');
+
+  useEffect(() => {
+    dispatch(fetchClasses({ limit: 100 }));
+    dispatch(fetchAcademicYears({ limit: 100 }));
+    dispatch(fetchStudents({ limit: 100 }));
+    dispatch(fetchStaff({ limit: 100 }));
+    dispatch(fetchExams({ limit: 100 }));
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (academicYears.length > 0 && !selectedAcademicYear) {
+      const currentYear = academicYears.find(y => y.isCurrent);
+      if (currentYear) setSelectedAcademicYear(currentYear._id);
+    }
+  }, [academicYears]);
+
+  const getCurrentAcademicYear = () => {
+    const year = academicYears.find(y => y._id === selectedAcademicYear);
+    return year?.year || '2025-2026';
+  };
+
+  const toggleSection = (sectionId) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [sectionId]: !prev[sectionId]
+    }));
+  };
+
+
+
+  const handleDownloadPDF = async (generator, params, filename, errorMsg = 'Please fill all required fields') => {
+    setIsLoading(true);
+    try {
+      const pdfBlob = await generator(params);
+      downloadPDF(pdfBlob, filename);
+      toast.success('PDF downloaded successfully');
+    } catch (error) {
+      console.error('PDF download error:', error);
+      toast.error(error.message || errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const categories = [
+    { id: 'noon-meal', name: 'Noon Meals', icon: CakeIcon },
+    { id: 'rice-distribution', name: 'Rice Distribution', icon: BuildingLibraryIcon },
+    { id: 'student', name: 'Student Reports', icon: AcademicCapIcon },
+    { id: 'sports', name: 'Sports Meet', icon: TrophyIcon },
+    { id: 'exam', name: 'Exam Reports', icon: ClipboardDocumentListIcon },
+    { id: 'financial', name: 'Financial', icon: BanknotesIcon },
+    { id: 'staff', name: 'Staff Reports', icon: UserIcon },
+    { id: 'admin', name: 'Administrative', icon: ChartBarIcon },
+  ];
+  const getStudentOptions = (academicYearId = null) => {
+    let filtered = students;
+    if (academicYearId) {
+      filtered = filtered.filter(s => s.academicYearId === academicYearId || s.academicYearId?._id === academicYearId);
+    }
+    return filtered.map(s => ({
+      value: s._id,
+      label: `${s.fullName} (${s.admissionNo})`
+    }));
+  };
+
+
+  const loadStudentOptions = async (inputValue, academicYearId) => {
+    if (!inputValue) return getStudentOptions(academicYearId).slice(0, 50);
+    try {
+      const response = await studentService.getStudents({ search: inputValue, academicYearId, limit: 50 });
+      return (response.data || []).map(s => ({
+        value: s._id,
+        label: `${s.fullName} (${s.admissionNo})`
+      }));
+    } catch (error) {
+      console.error('Error fetching students:', error);
+      return [];
+    }
+  };
+
+  const reactSelectStyles = {
+    control: (base, state) => ({
+      ...base,
+      borderColor: state.isFocused ? '#10b981' : '#e5e7eb',
+      boxShadow: state.isFocused ? '0 0 0 1px #10b981' : 'none',
+      '&:hover': { borderColor: state.isFocused ? '#10b981' : '#d1d5db' },
+      borderRadius: '0.5rem',
+      padding: '0.125rem',
+      fontSize: '0.875rem',
+      minHeight: '38px',
+      backgroundColor: '#ffffff',
+    }),
+    option: (base, state) => ({
+      ...base,
+      backgroundColor: state.isSelected ? '#10b981' : state.isFocused ? '#ecfdf5' : 'white',
+      color: state.isSelected ? 'white' : '#374151',
+      fontSize: '0.875rem',
+      cursor: 'pointer',
+      '&:active': { backgroundColor: '#10b981', color: 'white' }
+    }),
+    menu: (base) => ({
+      ...base,
+      borderRadius: '0.5rem',
+      zIndex: 50,
+      border: '1px solid #e5e7eb',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+    }),
+    placeholder: (base) => ({
+      ...base,
+      color: '#9ca3af'
+    }),
+    singleValue: (base) => ({
+      ...base,
+      color: '#111827'
+    })
+  };  if (isLoading) return <LoadingSpinner />;
+
+  return (
+    <div className="space-y-5 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">PDF Reports & Certificates</h1>
+        <p className="text-sm text-gray-500 mt-0.5">Generate various reports, certificates, and official documents</p>
+      </div>
+
+      {/* Category Navigation - Horizontal scroll on mobile */}
+      <div className="border-b border-gray-200 overflow-x-auto">
+        <div className="flex gap-1 min-w-max pb-px">
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setActiveCategory(cat.id)}
+              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-t-lg transition-all ${
+                activeCategory === cat.id
+                  ? 'bg-emerald-50 text-emerald-700 border-b-2 border-emerald-500'
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <cat.icon className="w-4 h-4" />
+              <span>{cat.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ==================== NOON MEAL & FOOD REPORTS ==================== */}
+      {activeCategory === 'noon-meal' && (
+        <div className="space-y-4">
+          {/* Noon Meal Register */}
+          <ReportCard title="Noon Meal Register" description="Generate class-wise noon meal register">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  <option value="">Select Class</option>
+                  {classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Current Month</option>
+                  {[...Array(12)].map((_, i) => (<option key={i+1} value={i+1}>{new Date(2000, i, 1).toLocaleString('default', { month: 'long' })}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <input type="number" onWheel={(e) => e.target.blur()} value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Working Days</label>
+                <input type="number" onWheel={(e) => e.target.blur()} value={workingDays} onChange={(e) => setWorkingDays(parseInt(e.target.value))} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getNoonMealPDF(selectedClass, selectedMonth, selectedYear, workingDays); }, {}, `Noon_Meal_${selectedClass}_${selectedMonth}_${selectedYear}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          {/* Noon Feeding Register */}
+          <ReportCard title="Noon Feeding Register" description="Generate noon feeding register">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>
+                  {classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Current Month</option>
+                  {[...Array(12)].map((_, i) => (<option key={i+1} value={i+1}>{new Date(2000, i, 1).toLocaleString('default', { month: 'long' })}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <input type="number" onWheel={(e) => e.target.blur()} value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getNoonFeedingRegisterPDF(selectedClass, selectedMonth, selectedYear); }, {}, `Noon_Feeding_${selectedClass}_${selectedMonth}_${selectedYear}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          {/* Mid Day Meal */}
+          <ReportCard title="Mid Day Meal Register" description="Generate mid day meal register">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>
+                  {classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getMidDayMealPDF(selectedClass, selectedAcademicYear); }, {}, `Mid_Day_Meal_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          {/* Bhakshya Badratha */}
+          <ReportCard title="Bhakshya Badratha (Food Security)" description="Generate food security allowance list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>
+                  {classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getBhakshyaBadrathaPDF(selectedClass, selectedAcademicYear); }, {}, `Bhakshya_Badratha_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== RICE DISTRIBUTION REPORTS ==================== */}
+      {activeCategory === 'rice-distribution' && (
+        <div className="space-y-4">
+          <ReportCard title="Rice Distribution List" description="Generate class-wise rice distribution list">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>
+                  {classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Distribution Type</label>
+                <select value={selectedDistributionType} onChange={(e) => setSelectedDistributionType(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Types</option><option value="monthly">Monthly</option><option value="special">Special</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getRiceDistributionPDF(selectedClass, selectedAcademicYear, selectedDistributionType); }, {}, `Rice_Distribution_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Balance Rice Distribution" description="Generate balance rice distribution report">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Current Month</option>
+                  {[...Array(12)].map((_, i) => (<option key={i+1} value={i+1}>{new Date(2000, i, 1).toLocaleString('default', { month: 'long' })}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <input type="number" onWheel={(e) => e.target.blur()} value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getBalanceRiceDistributionPDF(selectedClass, selectedMonth, selectedYear); }, {}, `Balance_Rice_${selectedClass}_${selectedMonth}_${selectedYear}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Special Rice Distribution" description="Generate special rice distribution report">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Current Month</option>
+                  {[...Array(12)].map((_, i) => (<option key={i+1} value={i+1}>{new Date(2000, i, 1).toLocaleString('default', { month: 'long' })}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <input type="number" onWheel={(e) => e.target.blur()} value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getSpecialRiceDistributionPDF(selectedClass, selectedMonth, selectedYear); }, {}, `Special_Rice_${selectedClass}_${selectedMonth}_${selectedYear}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== STUDENT REPORTS ==================== */}
+      {activeCategory === 'student' && (
+        <div className="space-y-4">
+          <ReportCard title="Student List" description="Generate class-wise student list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getStudentListPDF(selectedClass, selectedAcademicYear); }, {}, `Student_List_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="ID Card List" description="Generate class-wise ID card list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getIDCardListPDF(selectedClass, selectedAcademicYear); }, {}, `ID_Card_List_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Student Certificate" description="Generate bonafide/study certificate">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="sm:col-span-1"><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={certificateAcademicYear} onChange={(e) => { setCertificateAcademicYear(e.target.value); setSelectedStudent(null); }} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  <option value="">Select Year...</option>
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+              <div className="sm:col-span-1">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Student <span className="text-rose-500">*</span></label>
+                <AsyncSelect
+                  cacheOptions
+                  defaultOptions={getStudentOptions(certificateAcademicYear).slice(0, 50)}
+                  loadOptions={(inputValue) => loadStudentOptions(inputValue, certificateAcademicYear)}
+                  value={selectedStudent}
+                  onChange={setSelectedStudent}
+                  placeholder="Search student..."
+                  styles={reactSelectStyles}
+                  isClearable
+                  isDisabled={!certificateAcademicYear}
+                />
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={certificateDate} onChange={(e) => setCertificateDate(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Place</label>
+                <input type="text" value={certificatePlace} onChange={(e) => setCertificatePlace(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" placeholder="Kottukkara" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedStudent) throw new Error('Select student'); return await pdfService.getCertificatePDF(selectedStudent?.value, { date: certificateDate, place: certificatePlace }); }, {}, `Certificate_${selectedStudent?.value}.pdf`, 'Select student')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Abstract of Admission Register" description="Generate admission abstract for student">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="sm:col-span-1"><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={abstractAcademicYear} onChange={(e) => { setAbstractAcademicYear(e.target.value); setSelectedStudent(null); }} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  <option value="">Select Year...</option>
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+              <div className="sm:col-span-1">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Student <span className="text-rose-500">*</span></label>
+                <AsyncSelect
+                  cacheOptions
+                  defaultOptions={getStudentOptions(abstractAcademicYear).slice(0, 50)}
+                  loadOptions={(inputValue) => loadStudentOptions(inputValue, abstractAcademicYear)}
+                  value={selectedStudent}
+                  onChange={setSelectedStudent}
+                  placeholder="Search student..."
+                  styles={reactSelectStyles}
+                  isClearable
+                  isDisabled={!abstractAcademicYear}
+                />
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" />
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Station</label>
+                <input type="text" value={reportStation} onChange={(e) => setReportStation(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg" placeholder="KOTTUKKARA" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedStudent) throw new Error('Select student'); return await pdfService.getAbstractPDF(selectedStudent?.value, { date: reportDate, station: reportStation }); }, {}, `Abstract_${selectedStudent?.value}.pdf`, 'Select student')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== SPORTS MEET REPORTS ==================== */}
+      {activeCategory === 'sports' && (
+        <div className="space-y-4">
+          <ReportCard 
+            title="School Sports Meet Entry Form" 
+            description="Official Sports Meet Entry Form for Junior (Class 8) & Senior (Class 9 & 10) with dynamic event tick boxes, chest numbers and official signatures"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select 
+                  value={selectedClass} 
+                  onChange={(e) => setSelectedClass(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">All Classes</option>
+                  {classes.map(c => (
+                    <option key={c._id} value={c._id}>{c.displayName || c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select 
+                  value={selectedAcademicYear} 
+                  onChange={(e) => setSelectedAcademicYear(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">Current Academic Year</option>
+                  {academicYears.map(y => (
+                    <option key={y._id} value={y._id}>{y.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Category</label>
+                <select 
+                  value={sportsCategory} 
+                  onChange={(e) => setSportsCategory(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="auto">Auto-detect (8th: Sub Junior, 9th: Junior, 10th: Senior)</option>
+                  <option value="sub_junior">Sub Junior (7 Events - Class 8)</option>
+                  <option value="junior">Junior (10 Events - Class 9)</option>
+                  <option value="senior">Senior (10 Events - Class 10)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Gender Group</label>
+                <select 
+                  value={sportsGender} 
+                  onChange={(e) => setSportsGender(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="all">Boys & Girls (Separate Pages)</option>
+                  <option value="boys">Boys Only</option>
+                  <option value="girls">Girls Only</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">House (Optional)</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Red, Blue, Green, Yellow" 
+                  value={sportsHouse} 
+                  onChange={(e) => setSportsHouse(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                <input 
+                  type="date" 
+                  value={reportDate} 
+                  onChange={(e) => setReportDate(e.target.value)} 
+                  className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(
+                  async () => {
+                    return await pdfService.getSportsEntryPDF(selectedClass, selectedAcademicYear, {
+                      category: sportsCategory,
+                      gender: sportsGender,
+                      house: sportsHouse,
+                      date: reportDate
+                    });
+                  },
+                  {},
+                  `Sports_Entry_Form_${getCurrentAcademicYear()}.pdf`,
+                  'Failed to generate sports entry form'
+                )}
+                isLoading={isLoading}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== EXAM REPORTS ==================== */}
+      {activeCategory === 'exam' && (
+        <div className="space-y-4">
+          <ReportCard title="Marklist" description="Generate student marklist for exams">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={marklistAcademicYear} onChange={(e) => { setMarklistAcademicYear(e.target.value); setSelectedStudent(null); setSelectedExam(''); }} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Academic Year</option>
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+              <div className="sm:col-span-1">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Student <span className="text-rose-500">*</span></label>
+                <AsyncSelect
+                  cacheOptions
+                  defaultOptions={getStudentOptions(marklistAcademicYear).slice(0, 50)}
+                  loadOptions={(inputValue) => loadStudentOptions(inputValue, marklistAcademicYear)}
+                  value={selectedStudent}
+                  onChange={setSelectedStudent}
+                  placeholder="Search student..."
+                  styles={reactSelectStyles}
+                  isClearable
+                  isDisabled={!marklistAcademicYear}
+                />
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Exam</label>
+                <select value={selectedExam} onChange={(e) => setSelectedExam(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Annual Exam</option>
+                  {exams.filter(e => e.examType === 'annual' && (!marklistAcademicYear || e.academicYearId === marklistAcademicYear || e.academicYearId?._id === marklistAcademicYear)).map(e => (<option key={e._id} value={e._id}>{e.displayName || e.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedStudent) throw new Error('Select student'); return await pdfService.getMarklistPDF(selectedStudent?.value, selectedExam); }, {}, `Marklist_${selectedStudent?.value}.pdf`, 'Select student')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Promotion List" description="Generate class promotion list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Classes</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Exam</label>
+                <select value={selectedExam} onChange={(e) => setSelectedExam(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Exams</option>{exams.map(e => (<option key={e._id} value={e._id}>{e.displayName || e.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getPromotionListPDF(selectedClass, selectedExam); }, {}, `Promotion_List_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== FINANCIAL REPORTS ==================== */}
+      {activeCategory === 'financial' && (
+        <div className="space-y-4">
+          <ReportCard title="Fee Collection List" description="Generate class-wise fee collection list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Classes</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getFeeCollectionPDF(selectedClass, selectedAcademicYear); }, {}, `Fee_Collection_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Bank Account Details" description="Generate student bank account details by category">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Classes</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Category</label>
+                <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="ALL">All Categories</option><option value="SC">SC</option><option value="ST">ST</option><option value="OBC">OBC</option><option value="GENERAL">General</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getBankAccountDetailsPDF(selectedClass, selectedCategory); }, {}, `Bank_Details_${selectedCategory}_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== STAFF REPORTS ==================== */}
+      {activeCategory === 'staff' && (
+        <div className="space-y-4">
+          <ReportCard title="Staff List" description="Generate complete staff directory">
+            <div><label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
+              <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                <option value="">All Staff</option><option value="active">Active</option><option value="inactive">Inactive</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getStaffListPDF(selectedStatus || null); }, {}, `Staff_List_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Class Teacher List" description="Generate class teacher assignment list">
+            <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+              <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getClassTeacherListPDF(selectedAcademicYear); }, {}, `Class_Teacher_List_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+
+      {/* ==================== ADMIN REPORTS ==================== */}
+      {activeCategory === 'admin' && (
+        <div className="space-y-4">
+          <ReportCard title="Statistical Data Report" description="Generate class-wise statistical data">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class <span className="text-rose-500">*</span></label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">Select Class</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { if (!selectedClass) throw new Error('Select class'); return await pdfService.getStatisticalDataPDF(selectedClass, selectedAcademicYear); }, {}, `Statistical_Data_${selectedClass}_${getCurrentAcademicYear()}.pdf`, 'Select class')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Class PTA List" description="Generate class PTA member list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Classes</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getClassPTAPDF(selectedClass, selectedAcademicYear); }, {}, `Class_PTA_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+
+          <ReportCard title="Textbook Distribution" description="Generate textbook distribution list">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  <option value="">All Classes</option>{classes.map(c => (<option key={c._id} value={c._id}>{c.displayName || c.name}</option>))}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedAcademicYear} onChange={(e) => setSelectedAcademicYear(e.target.value)} className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg">
+                  {academicYears.map(y => (<option key={y._id} value={y._id}>{y.name}</option>))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+              <ActionButtons
+                onDownload={() => handleDownloadPDF(async () => { return await pdfService.getTextBookDistributionPDF(selectedClass, selectedAcademicYear); }, {}, `Textbook_Distribution_${getCurrentAcademicYear()}.pdf`, '')}
+              />
+            </div>
+          </ReportCard>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PdfReports;
