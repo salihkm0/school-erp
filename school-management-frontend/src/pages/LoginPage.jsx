@@ -12,6 +12,7 @@ const LoginPage = () => {
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const { isLoading } = useSelector((state) => state.auth)
+  const { profile: schoolProfile } = useSelector((state) => state.schoolProfile)
   const [showPassword, setShowPassword] = useState(false)
   const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [isRegistering, setIsRegistering] = useState(false)
@@ -178,21 +179,21 @@ const LoginPage = () => {
             Empowering the<br/>Leaders of Tomorrow
           </h1>
           <p className="text-blue-100/90 text-lg max-w-md font-medium leading-relaxed">
-            Welcome to the central portal for students, educators, and administrators of PPMHSS Kottukkara.
+            {schoolProfile?.tagline || `Welcome to the central portal for students, educators, and administrators of ${schoolProfile?.name || 'our institution'}.`}
           </p>
         </div>
         
         {/* Mobile Logo Overlay */}
         <div className="lg:hidden absolute inset-0 z-20 flex items-center justify-center px-4">
-           <div className="bg-white/95 backdrop-blur-sm p-3 rounded-xl flex items-center gap-4 shadow-lg absolute bottom-[-20px]">
+           <div className="bg-white/95 backdrop-blur-sm p-3 rounded-xl flex items-center gap-4 shadow-lg absolute bottom-[-20px] max-w-[90%]">
              <img 
-               src="https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg"
+               src={schoolProfile?.branding?.logoUrl || "https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg"}
                alt="School Logo"
                className="w-14 h-14 object-contain"
              />
              <div>
-               <h2 className="text-xl font-bold text-[#1a2b4b] leading-tight">PPMHSS</h2>
-               <p className="text-sm text-gray-500 font-medium">Kottukkara</p>
+               <h2 className="text-lg font-bold text-[#1a2b4b] leading-tight line-clamp-1">{schoolProfile?.shortName || schoolProfile?.name || 'School ERP'}</h2>
+               <p className="text-xs text-gray-500 font-medium line-clamp-1">{schoolProfile?.address?.city || schoolProfile?.address?.district || ''}</p>
              </div>
            </div>
         </div>
@@ -206,12 +207,14 @@ const LoginPage = () => {
             {/* Desktop Header */}
             <div className="hidden lg:block text-center mb-8">
               <img 
-                src="https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg"
+                src={schoolProfile?.branding?.logoUrl || "https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg"}
                 alt="School Logo"
                 className="w-20 h-20 mx-auto mb-6 object-contain"
               />
               <h2 className="text-[#1a2b4b] text-[22px] font-bold">Sign in to your account</h2>
-              <p className="text-gray-500 mt-2 text-[13px]">Enter your academic credentials to proceed.</p>
+              <p className="text-gray-500 mt-2 text-[13px]">
+                {schoolProfile?.name ? `${schoolProfile.name} Academic Portal` : 'Enter your academic credentials to proceed.'}
+              </p>
             </div>
 
             {/* Mobile Header */}
@@ -475,7 +478,7 @@ const LoginPage = () => {
               <Link to="/privacy-policy" className="font-semibold text-[#1a2b4b] hover:text-gray-700">Privacy Policy</Link>
               <Link to="/terms-and-conditions" className="font-semibold text-[#1a2b4b] hover:text-gray-700">Terms & Conditions</Link>
             </div>
-            <p className="text-gray-400 mt-6 mb-4">© {new Date().getFullYear()} PPMHSS Kottukkara</p>
+            <p className="text-gray-400 mt-6 mb-4">© {new Date().getFullYear()} {schoolProfile?.name || 'School ERP'}</p>
           </div>
 
           {/* Desktop Footer text */}

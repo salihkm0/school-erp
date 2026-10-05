@@ -237,3 +237,143 @@ exports.updateSchoolContacts = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+const { getSchoolProfile, invalidateSchoolProfileCache, DEFAULT_SCHOOL_PROFILE } = require('../utils/schoolProfileHelper');
+
+/**
+ * GET /api/app-config/school-profile (Public)
+ * Returns dynamic school identity, contact details, and branding URLs.
+ */
+exports.getSchoolProfile = async (req, res) => {
+  try {
+    const profile = await getSchoolProfile();
+    res.json({
+      success: true,
+      data: profile
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * PUT /api/app-config/school-profile (Admin only)
+ * Updates complete school profile configuration.
+ */
+exports.updateSchoolProfile = async (req, res) => {
+  try {
+    const profileData = req.body;
+    if (!profileData || typeof profileData !== 'object') {
+      return res.status(400).json({ success: false, message: 'Invalid profile data provided.' });
+    }
+
+    let configDoc = await AppConfig.findOne({ key: 'SCHOOL_PROFILE' });
+    
+    // Merge existing/default with new data to prevent accidental missing keys
+    const currentProfile = await getSchoolProfile();
+    const updatedProfile = {
+      ...currentProfile,
+      ...profileData,
+      address: {
+        ...(currentProfile.address || {}),
+        ...(profileData.address || {})
+      },
+      contact: {
+        ...(currentProfile.contact || {}),
+        ...(profileData.contact || {})
+      },
+      branding: {
+        ...(currentProfile.branding || {}),
+        ...(profileData.branding || {})
+      },
+      keyPersonnel: {
+        ...(currentProfile.keyPersonnel || {}),
+        ...(profileData.keyPersonnel || {})
+      }
+    };
+
+    if (configDoc) {
+      configDoc.value = updatedProfile;
+      configDoc.updatedBy = req.user ? req.user._id : null;
+      configDoc.markModified('value');
+      await configDoc.save();
+    } else {
+      await AppConfig.create({
+        key: 'SCHOOL_PROFILE',
+        value: updatedProfile,
+        description: 'Comprehensive School Profile, Branding, and Contact Information',
+        updatedBy: req.user ? req.user._id : null
+      });
+    }
+
+    invalidateSchoolProfileCache();
+
+    res.json({
+      success: true,
+      message: 'School profile updated successfully.',
+      data: updatedProfile
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * POST /api/app-config/upload-branding (Admin only)
+ * Uploads branding asset (logo, favicon, signature, seal)
+ */
+exports.uploadSchoolBranding = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded.' });
+    }
+
+    const fileType = req.body.type || req.file.fieldname || 'logo'; // 'logoUrl', 'faviconUrl', 'principalSignatureUrl', 'schoolSealUrl'
+    const fileUrl = `/uploads/branding/${req.file.filename}`;
+
+    // Optionally auto-update the specific branding field in SCHOOL_PROFILE
+    let configDoc = await AppConfig.findOne({ key: 'SCHOOL_PROFILE' });
+    const currentProfile = await getSchoolProfile();
+    
+    let brandingKey = 'logoUrl';
+    if (fileType.includes('favicon') || fileType === 'favicon') brandingKey = 'faviconUrl';
+    else if (fileType.includes('signature') || fileType === 'signature') brandingKey = 'principalSignatureUrl';
+    else if (fileType.includes('seal') || fileType === 'seal') brandingKey = 'schoolSealUrl';
+
+    const updatedProfile = {
+      ...currentProfile,
+      branding: {
+        ...(currentProfile.branding || {}),
+        [brandingKey]: fileUrl
+      }
+    };
+
+    if (configDoc) {
+      configDoc.value = updatedProfile;
+      configDoc.updatedBy = req.user ? req.user._id : null;
+      configDoc.markModified('value');
+      await configDoc.save();
+    } else {
+      await AppConfig.create({
+        key: 'SCHOOL_PROFILE',
+        value: updatedProfile,
+        description: 'Comprehensive School Profile, Branding, and Contact Information',
+        updatedBy: req.user ? req.user._id : null
+      });
+    }
+
+    invalidateSchoolProfileCache();
+
+    res.json({
+      success: true,
+      message: 'Branding asset uploaded and applied successfully.',
+      data: {
+        fileUrl,
+        brandingKey,
+        profile: updatedProfile
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

@@ -5,8 +5,9 @@ const fs = require('fs');
 const uploadDir = process.env.UPLOAD_PATH || 'uploads/';
 const profileDir = path.join(uploadDir, 'profiles');
 const documentDir = path.join(uploadDir, 'documents');
+const brandingDir = path.join(uploadDir, 'branding');
 
-[uploadDir, profileDir, documentDir].forEach(dir => {
+[uploadDir, profileDir, documentDir, brandingDir].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -19,6 +20,8 @@ const storage = multer.diskStorage({
       dest = profileDir;
     } else if (file.fieldname === 'document') {
       dest = documentDir;
+    } else if (['logo', 'favicon', 'signature', 'seal', 'branding', 'file'].includes(file.fieldname)) {
+      dest = brandingDir;
     }
     cb(null, dest);
   },

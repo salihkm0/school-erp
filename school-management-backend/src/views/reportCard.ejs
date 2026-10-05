@@ -373,7 +373,7 @@ html, body {
                 <div class="school-logo">
                     <img src="<%= schoolLogo %>" alt="School Logo">
                 </div>
-                <div class="school-name">P.P.M.H.S.S. KOTTUKKARA</div>
+                <div class="school-name"><%= typeof schoolName !== 'undefined' ? schoolName : (typeof school !== 'undefined' && school.name ? school.name : 'P.P.M.H.S.S. KOTTUKKARA') %></div>
                 <div class="report-title">PROGRESS REPORT - <%= academicYear %></div>
                 <!-- <div class="exam-info" style="font-size: 11px; font-weight: bold; margin-top: 3px;">Exam: <%= examName %></div> -->
                 <div class="report-title" style="font-size: 12px; margin-top: 1px;"><%= examName %></div>

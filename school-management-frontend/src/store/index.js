@@ -14,10 +14,12 @@ import dashboardReducer from './slices/dashboardSlice'  // Add this import
 import uiReducer from './slices/uiSlice'
 import socketReducer from './slices/socketSlice' 
 import studentFilterReducer from './slices/studentSlice'
+import schoolProfileReducer from './slices/schoolProfileSlice'
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
+    schoolProfile: schoolProfileReducer,
     students: studentReducer,
     staff: staffReducer,
     classes: classReducer,

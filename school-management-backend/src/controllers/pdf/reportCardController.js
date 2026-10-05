@@ -14,24 +14,22 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 
-// School logo URL
-const SCHOOL_LOGO_URL = 'https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg';
+// School Profile Helper
+const { getSchoolProfile, getSchoolLogoDataUri: getDynamicSchoolLogoDataUri } = require('../../utils/schoolProfileHelper');
 
-let cachedLogoBase64 = null;
 function getSchoolLogoDataUri() {
-  if (cachedLogoBase64) return cachedLogoBase64;
   try {
     const localLogoPath = path.join(__dirname, '../../../public/school-logo.jpg');
     if (fs.existsSync(localLogoPath)) {
       const buf = fs.readFileSync(localLogoPath);
-      cachedLogoBase64 = `data:image/jpeg;base64,${buf.toString('base64')}`;
-      return cachedLogoBase64;
+      return `data:image/jpeg;base64,${buf.toString('base64')}`;
     }
   } catch (e) {
     console.error('Error loading local logo:', e);
   }
-  return SCHOOL_LOGO_URL;
+  return 'https://res.cloudinary.com/dmjqgjcut/image/upload/v1769946977/school-logo_uugskb.jpg';
 }
+
 
 // Helper function to calculate grade
 const getGrade = (percentage) => {

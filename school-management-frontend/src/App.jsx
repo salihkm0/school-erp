@@ -21,6 +21,7 @@ import NotificationsPage from './pages/NotificationsPage'
 import SettingsPage from './pages/SettingsPage'
 import PdfReports from './components/pdf/PdfReports'
 import { checkAuth } from './store/slices/authSlice'
+import { fetchSchoolProfile } from './store/slices/schoolProfileSlice'
 import useSocketInit from './hooks/useSocketInit'
 import useFCMToken from './hooks/useFCMToken.jsx'
 import { Toaster } from 'react-hot-toast'
@@ -65,6 +66,7 @@ import ActiveUsers from './pages/administration/ActiveUsers'
 function App() {
   const dispatch = useDispatch()
   const { isLoading, isAuthenticated } = useSelector((state) => state.auth)
+  const { profile: schoolProfile } = useSelector((state) => state.schoolProfile)
   const { isConnected, socket } = useSocketInit()
   
   // Initialize Firebase Cloud Messaging
@@ -75,7 +77,23 @@ function App() {
 
   useEffect(() => {
     dispatch(checkAuth())
+    dispatch(fetchSchoolProfile())
   }, [dispatch])
+
+  useEffect(() => {
+    if (schoolProfile?.name) {
+      document.title = `${schoolProfile.name} | School ERP`;
+    }
+    if (schoolProfile?.branding?.faviconUrl) {
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.getElementsByTagName('head')[0].appendChild(link);
+      }
+      link.href = schoolProfile.branding.faviconUrl;
+    }
+  }, [schoolProfile])
 
   useEffect(() => {
     if (socket) {

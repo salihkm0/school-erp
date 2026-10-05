@@ -69,6 +69,7 @@ const Sidebar = ({ isOpen, setIsOpen, isMobile }) => {
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const { user } = useSelector((state) => state.auth)
+  const { profile: schoolProfile } = useSelector((state) => state.schoolProfile)
   const userRole = user?.role || 'parent'
 
   const filteredMenu = menuItems.filter(item => item.roles.includes(userRole))
@@ -119,16 +120,21 @@ const Sidebar = ({ isOpen, setIsOpen, isMobile }) => {
         {/* Logo Section */}
         <div className="flex items-center justify-between px-4 py-4 border-b border-gray-200">
           <div className={`flex items-center gap-2.5 ${!isOpen ? 'justify-center w-full' : ''}`}>
-            {/* <div className="w-9 h-9 bg-emerald-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-              PPM
-            </div> */}
-            <div className='w-10 h-10'>
-            <img src="https://res.cloudinary.com/dmjqgjcut/image/upload/v1777479500/school_logo-Photoroom_xcljv5.png" alt="" />
+            <div className='w-10 h-10 flex-shrink-0 flex items-center justify-center overflow-hidden rounded-lg'>
+              <img 
+                src={schoolProfile?.branding?.logoUrl || "https://res.cloudinary.com/dmjqgjcut/image/upload/v1777479500/school_logo-Photoroom_xcljv5.png"} 
+                alt="School Logo" 
+                className="w-full h-full object-contain"
+              />
             </div>
             {isOpen && (
-              <div className="flex flex-col">
-                <span className="font-semibold text-gray-800 text-sm">PPM HSS</span>
-                <span className="text-[10px] text-gray-400">KOTTUKKARA</span>
+              <div className="flex flex-col min-w-0 flex-1">
+                <span className="font-semibold text-gray-800 text-sm truncate">
+                  {schoolProfile?.shortName || schoolProfile?.name || 'School ERP'}
+                </span>
+                <span className="text-[10px] text-gray-400 uppercase tracking-wider truncate">
+                  {schoolProfile?.address?.city || schoolProfile?.address?.district || ''}
+                </span>
               </div>
             )}
           </div>

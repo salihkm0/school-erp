@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_redux/flutter_redux.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:school_management/services/school_profile_service.dart';
 import 'package:school_management/store/app_state.dart';
 import 'package:school_management/utils/theme.dart';
 
@@ -92,25 +93,38 @@ class _CustomDrawerState extends State<CustomDrawer> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text(
-                                'PPMHSS',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  SchoolProfileService.currentProfile.shortName.isNotEmpty
+                                      ? SchoolProfileService.currentProfile.shortName
+                                      : (SchoolProfileService.currentProfile.name.isNotEmpty 
+                                          ? SchoolProfileService.currentProfile.name 
+                                          : 'School ERP'),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              Text(
-                                'KOTTUKKARA',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 11,
+                                Text(
+                                  SchoolProfileService.currentProfile.city.isNotEmpty
+                                      ? SchoolProfileService.currentProfile.city.toUpperCase()
+                                      : 'PORTAL',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 10,
+                                    letterSpacing: 1.1,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -429,7 +443,7 @@ class _CustomDrawerState extends State<CustomDrawer> {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        '2024 PPMHSS',
+                        '${DateTime.now().year} ${SchoolProfileService.currentProfile.shortName.isNotEmpty ? SchoolProfileService.currentProfile.shortName : (SchoolProfileService.currentProfile.name.isNotEmpty ? SchoolProfileService.currentProfile.name : "School ERP")}',
                         style: TextStyle(
                           fontSize: 9,
                           color: Colors.grey[500],

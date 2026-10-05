@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:school_management/models/school_profile_model.dart';
 import 'package:school_management/services/push_notification_service.dart';
+import 'package:school_management/services/school_profile_service.dart';
 import 'package:school_management/utils/theme.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -14,11 +16,13 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
   late Animation<double> _logoScaleAnimation;
+  SchoolProfileModel _schoolProfile = SchoolProfileService.currentProfile;
 
   @override
   void initState() {
     super.initState();
     _initializePushNotifications();
+    _fetchSchoolProfile();
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
@@ -43,6 +47,17 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     );
     
     _animationController.forward();
+  }
+
+  Future<void> _fetchSchoolProfile() async {
+    try {
+      final profile = await SchoolProfileService().getSchoolProfile();
+      if (mounted) {
+        setState(() {
+          _schoolProfile = profile;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _initializePushNotifications() async {
@@ -122,24 +137,30 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                   ),
                   const SizedBox(height: 32),
                   // Title Text
-                  const Text(
-                    'PPMHSS',
-                    style: TextStyle(
+                  Text(
+                    _schoolProfile.shortName.isNotEmpty
+                        ? _schoolProfile.shortName
+                        : (_schoolProfile.name.isNotEmpty ? _schoolProfile.name : 'School ERP'),
+                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 32,
+                      fontSize: 30,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1.5,
                     ),
+                    textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Kottukkara',
-                    style: TextStyle(
+                  Text(
+                    _schoolProfile.city.isNotEmpty
+                        ? _schoolProfile.city
+                        : (_schoolProfile.tagline.isNotEmpty ? _schoolProfile.tagline : ''),
+                    style: const TextStyle(
                       color: Colors.white70,
-                      fontSize: 18,
+                      fontSize: 16,
                       fontWeight: FontWeight.w500,
                       letterSpacing: 2,
                     ),
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
