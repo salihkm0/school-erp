@@ -15,11 +15,13 @@ import uiReducer from './slices/uiSlice'
 import socketReducer from './slices/socketSlice' 
 import studentFilterReducer from './slices/studentSlice'
 import schoolProfileReducer from './slices/schoolProfileSlice'
+import eventReducer from './slices/eventSlice'
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
     schoolProfile: schoolProfileReducer,
+    events: eventReducer,
     students: studentReducer,
     staff: staffReducer,
     classes: classReducer,

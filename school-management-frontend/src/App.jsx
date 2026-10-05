@@ -19,6 +19,7 @@ import SubjectsPage from './pages/SubjectsPage'
 import ReportsPage from './pages/ReportsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import SettingsPage from './pages/SettingsPage'
+import EventsPage from './pages/EventsPage'
 import PdfReports from './components/pdf/PdfReports'
 import { checkAuth } from './store/slices/authSlice'
 import { fetchSchoolProfile } from './store/slices/schoolProfileSlice'
@@ -222,6 +223,7 @@ function App() {
           <Route path="exams/*" element={<ExamsPage />} />
           <Route path="attendance/*" element={<AttendancePage />} />
           <Route path="duties/*" element={<DutiesPage />} />
+          <Route path="events/*" element={<EventsPage />} />
           <Route path="parents/*" element={<ParentsPage />} />
           <Route path="subjects/*" element={<SubjectsPage />} />
           <Route path="reports/*" element={<ReportsPage />} />

@@ -20,6 +20,7 @@ import {
   ChevronRightIcon,
   ArchiveBoxIcon,
   TableCellsIcon,
+  TrophyIcon,
 } from '@heroicons/react/24/outline'
 import { logout } from '../../store/slices/authSlice'
 import { disconnectSocket } from '../../services/socketService'
@@ -30,6 +31,7 @@ const menuItems = [
 
   // Common routes for all roles
   { path: '/dashboard', name: 'Dashboard', icon: HomeIcon, roles: ['admin', 'staff', 'parent'] },
+  { path: '/events', name: 'Events & Fests', icon: TrophyIcon, roles: ['admin', 'staff', 'parent'] },
 
   // Admin-specific routes
   { path: '/students', name: 'Students', icon: UsersIcon, roles: ['admin'] },

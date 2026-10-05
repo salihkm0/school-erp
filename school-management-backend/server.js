@@ -64,6 +64,7 @@ const historicalImportRoutes = require('./src/routes/historicalImportRoutes');
 const jobRoutes = require('./src/routes/jobRoutes');
 const administrationRoutes = require('./src/routes/administrationRoutes');
 const appConfigRoutes = require('./src/routes/appConfigRoutes');
+const festEventRoutes = require('./src/routes/festEventRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -302,6 +303,9 @@ app.use('/api/jobs', jobRoutes);
 
 // App Config (Version Check)
 app.use('/api/app-config', appConfigRoutes);
+
+// Sports & Arts Events / Fests
+app.use('/api/events', festEventRoutes);
 
 
 // Health check endpoint
