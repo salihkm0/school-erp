@@ -416,6 +416,38 @@ export default function DailyAttendanceRollCall({ defaultClassId = null, isStaff
         </div>
       </div>
 
+      {/* Holiday Banner if selected date is a configured Holiday or School Event */}
+      {dailyAttendance?.holiday && (
+        <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border border-amber-200/90 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3.5 animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-xs">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-extrabold text-amber-950">
+                  {dailyAttendance.holiday.title}
+                </span>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md uppercase tracking-wider bg-amber-200/80 text-amber-900 border border-amber-300">
+                  {(dailyAttendance.holiday.eventType || 'Holiday').replace('_', ' ')}
+                </span>
+                {dailyAttendance.holiday.schoolClosed && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 border border-rose-200">
+                    School Closed
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-amber-800 mt-0.5">
+                {dailyAttendance.holiday.description || 'Configured Holiday / Special Event in School Academic Calendar'}
+              </p>
+            </div>
+          </div>
+          <div className="text-xs font-semibold text-amber-800/80 bg-amber-100/70 px-3 py-1.5 rounded-xl border border-amber-200">
+            Official Off Day
+          </div>
+        </div>
+      )}
+
       {/* Main Roll Call Interactive Table & Quick Actions */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
         {/* Quick Batch Actions & Search Toolbar */}

@@ -68,6 +68,17 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
 
   const studentsList = dailyMatrix?.students || []
 
+  // Map holidays by day number for fast O(1) lookup
+  const holidaysMap = useMemo(() => {
+    const map = {}
+    if (dailyMatrix?.holidays && Array.isArray(dailyMatrix.holidays)) {
+      dailyMatrix.holidays.forEach(h => {
+        map[h.day] = h
+      })
+    }
+    return map
+  }, [dailyMatrix])
+
   // Filter students
   const filteredStudents = useMemo(() => {
     return studentsList.filter(st =>
@@ -106,7 +117,12 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
       }
 
       daysArray.forEach(d => {
-        row[`Day ${d}`] = st.days?.[d] || '-'
+        const val = st.days?.[d] || '-'
+        if (holidaysMap[d] && (val === '-' || val === 'HOL')) {
+          row[`Day ${d}`] = `HOL (${holidaysMap[d].title || holidaysMap[d].name || 'Holiday'})`
+        } else {
+          row[`Day ${d}`] = val
+        }
       })
 
       row['Total Present'] = st.presentCount || 0
@@ -217,7 +233,7 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
         </div>
 
         {/* Monthly Summary Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-100">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 pt-6 border-t border-slate-100">
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60">
             <div className="text-xs text-slate-500 font-medium">Total Enrolled</div>
             <div className="text-xl font-black text-slate-900 mt-1">{studentsList.length} Students</div>
@@ -233,11 +249,18 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
           <div className="bg-purple-50 p-3.5 rounded-xl border border-purple-200/60">
             <div className="text-xs text-purple-700 font-bold">Official Working Days</div>
             <div className="text-xl font-black text-purple-900 mt-1">
-              {dailyMatrix?.totalWorkingDays || 25} Days
+              {dailyMatrix?.totalWorkingDays ?? 25} Days
             </div>
           </div>
 
-          <div className="bg-emerald-50 p-3.5 rounded-xl border border-emerald-200/60">
+          <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200/60">
+            <div className="text-xs text-amber-700 font-bold">Configured Holidays</div>
+            <div className="text-xl font-black text-amber-900 mt-1">
+              {Object.keys(holidaysMap).length} Days
+            </div>
+          </div>
+
+          <div className="bg-emerald-50 p-3.5 rounded-xl border border-emerald-200/60 col-span-2 sm:col-span-1">
             <div className="text-xs text-emerald-700 font-bold">Class Average %</div>
             <div className="text-xl font-black text-emerald-900 mt-1">
               {classStats.avgPercentage}%
@@ -275,8 +298,11 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-100 text-sky-800 font-bold">
               HD = Half Day
             </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-bold border border-amber-300">
+              🌴 H = Holiday
+            </span>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600">
-              SUN / HOL = Off
+              S = Sunday
             </span>
           </div>
         </div>
@@ -308,16 +334,31 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
                   {daysArray.map((day) => {
                     const dayOfWeek = new Date(selectedYear, selectedMonth - 1, day).getDay()
                     const isSunday = dayOfWeek === 0
+                    const holiday = holidaysMap[day]
+
+                    let headerClass = 'text-slate-800'
+                    let subtext = DAY_LETTERS[dayOfWeek]
+                    let headerTitle = `Day ${day} (${DAY_LETTERS[dayOfWeek]})`
+
+                    if (holiday) {
+                      headerClass = 'bg-amber-100/95 text-amber-950 font-black border-amber-300 ring-1 ring-inset ring-amber-300 shadow-xs'
+                      subtext = 'H'
+                      headerTitle = `Day ${day}: ${holiday.title || holiday.name} (${(holiday.eventType || 'holiday').replace('_', ' ')})`
+                    } else if (isSunday) {
+                      headerClass = 'bg-slate-200/70 text-slate-500'
+                      subtext = 'S'
+                      headerTitle = `Day ${day} (Sunday)`
+                    }
+
                     return (
                       <th
                         key={day}
-                        className={`py-2 px-1 min-w-[28px] max-w-[32px] border-r border-slate-200 font-bold ${
-                          isSunday ? 'bg-slate-200/70 text-slate-500' : 'text-slate-800'
-                        }`}
+                        title={headerTitle}
+                        className={`py-2 px-1 min-w-[28px] max-w-[32px] border-r border-slate-200 font-bold transition-colors ${headerClass}`}
                       >
                         <div>{day}</div>
-                        <div className="text-[9px] font-normal text-slate-400">
-                          {DAY_LETTERS[dayOfWeek]}
+                        <div className={`text-[9px] font-bold ${holiday ? 'text-amber-800' : isSunday ? 'text-slate-500' : 'text-slate-400'}`}>
+                          {subtext}
                         </div>
                       </th>
                     )
@@ -353,38 +394,47 @@ export default function DailyAttendanceMatrix({ defaultClassId = null }) {
                       const val = st.days?.[day] || '-'
                       const dayOfWeek = new Date(selectedYear, selectedMonth - 1, day).getDay()
                       const isSunday = dayOfWeek === 0
+                      const holiday = holidaysMap[day]
 
                       let cellClass = 'text-slate-300'
                       let cellText = '-'
+                      let tooltip = `Day ${day}`
 
                       if (val === 'present') {
                         cellClass = 'bg-emerald-100 text-emerald-800 font-bold'
                         cellText = 'P'
+                        tooltip = `Day ${day}: Present`
                       } else if (val === 'absent') {
                         cellClass = 'bg-rose-600 text-white font-black ring-1 ring-rose-400'
                         cellText = 'A'
+                        tooltip = `Day ${day}: Absent`
                       } else if (val === 'late') {
                         cellClass = 'bg-amber-400 text-slate-950 font-black'
                         cellText = 'L'
+                        tooltip = `Day ${day}: Late`
                       } else if (val === 'half_day') {
                         cellClass = 'bg-sky-200 text-sky-900 font-bold'
                         cellText = 'HD'
+                        tooltip = `Day ${day}: Half Day`
                       } else if (val === 'excused') {
                         cellClass = 'bg-purple-100 text-purple-800 font-bold'
                         cellText = 'E'
+                        tooltip = `Day ${day}: Excused`
+                      } else if (val === 'HOL' || holiday) {
+                        cellClass = 'bg-amber-50 text-amber-800 text-[10px] font-bold border-r border-amber-100'
+                        cellText = 'H'
+                        tooltip = `Day ${day}: Holiday - ${holiday?.title || holiday?.name || 'School Holiday'}`
                       } else if (val === 'SUN' || isSunday) {
                         cellClass = 'bg-slate-100/70 text-slate-400 text-[10px]'
                         cellText = 'S'
-                      } else if (val === 'HOL') {
-                        cellClass = 'bg-purple-50 text-purple-700 text-[10px] font-semibold'
-                        cellText = 'H'
+                        tooltip = `Day ${day}: Sunday Off`
                       }
 
                       return (
                         <td
                           key={day}
                           className={`p-1 border-r border-slate-100 ${cellClass}`}
-                          title={`Day ${day}: ${val.toUpperCase()}`}
+                          title={tooltip}
                         >
                           {cellText}
                         </td>

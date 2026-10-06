@@ -1,10 +1,102 @@
 const { Attendance, AttendanceTemplate, DailyAttendance, DailyAttendanceSession } = require('../models/Attendance');
+const SchoolCalendar = require('../models/SchoolCalendar');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const Notification = require('../models/Notification');
 const { broadcastToUser, broadcastToClass } = require('../config/socket');
 const { sortStudents } = require('../utils/studentSorter');
+
+// Helper function to resolve holidays and working days from SchoolCalendar + AttendanceTemplate
+async function getMonthHolidaysAndWorkingDays(year, month) {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
+  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+
+  const [calendarEvents, template] = await Promise.all([
+    SchoolCalendar.find({
+      $or: [
+        { startDate: { $lte: monthEnd }, endDate: { $gte: monthStart } },
+        { startDate: { $gte: monthStart, $lte: monthEnd } }
+      ]
+    }),
+    AttendanceTemplate.findOne({
+      year,
+      month,
+      isActive: true
+    })
+  ]);
+
+  const holidayMap = new Map();
+
+  // 1. Process events from SchoolCalendar (Primary source)
+  (calendarEvents || []).forEach(evt => {
+    const isOff = evt.isHoliday || evt.schoolClosed || ['public_holiday', 'vacation', 'restricted_holiday'].includes(evt.eventType);
+    if (isOff) {
+      const sDate = new Date(evt.startDate);
+      const eDate = evt.endDate ? new Date(evt.endDate) : new Date(evt.startDate);
+
+      const startDay = (sDate.getFullYear() === year && sDate.getMonth() + 1 === month)
+        ? sDate.getDate()
+        : (sDate < monthStart ? 1 : daysInMonth + 1);
+
+      const endDay = (eDate.getFullYear() === year && eDate.getMonth() + 1 === month)
+        ? eDate.getDate()
+        : (eDate > monthEnd ? daysInMonth : 0);
+
+      for (let d = Math.max(1, startDay); d <= Math.min(daysInMonth, endDay); d++) {
+        holidayMap.set(d, {
+          name: evt.title,
+          title: evt.title,
+          eventType: evt.eventType,
+          isHoliday: true,
+          color: evt.color || '#f59e0b',
+          description: evt.description || ''
+        });
+      }
+    }
+  });
+
+  // 2. Supplement with legacy AttendanceTemplate holidays
+  (template?.holidays || []).forEach(h => {
+    const hDate = new Date(h.date);
+    if (hDate.getMonth() + 1 === month && hDate.getFullYear() === year) {
+      if (!holidayMap.has(hDate.getDate())) {
+        holidayMap.set(hDate.getDate(), {
+          name: h.name,
+          title: h.name,
+          eventType: 'public_holiday',
+          isHoliday: true,
+          color: '#f59e0b',
+          description: h.description || ''
+        });
+      }
+    }
+  });
+
+  let sundaysCount = 0;
+  let holidaysNotOnSundayCount = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(year, month - 1, d).getDay();
+    if (dow === 0) {
+      sundaysCount++;
+    } else if (holidayMap.has(d)) {
+      holidaysNotOnSundayCount++;
+    }
+  }
+
+  const calculatedWorkingDays = Math.max(0, daysInMonth - sundaysCount - holidaysNotOnSundayCount);
+
+  return {
+    holidayMap,
+    holidaysList: Array.from(holidayMap.entries()).map(([day, info]) => ({ day, ...info })),
+    totalWorkingDays: calculatedWorkingDays || template?.totalWorkingDays || Math.max(0, daysInMonth - sundaysCount),
+    daysInMonth,
+    sundaysCount,
+    holidaysCount: holidayMap.size,
+    template
+  };
+}
 
 // Helper function to send attendance warning
 async function sendAttendanceWarning(student, month, year, attendancePercentage, classId) {
@@ -1401,8 +1493,14 @@ exports.getDailyAttendanceByClass = async (req, res) => {
 
     const sortPreference = classObj?.studentSortPreference || 'alphabetic';
 
-    // Parallel fetch: students, existing daily attendance, session log, and past 7 days logs
-    const [rawStudents, dailyRecords, sessionRecord, recentRecords] = await Promise.all([
+    const targetDate = new Date(targetDateStr);
+    const targetDateStart = new Date(targetDate);
+    targetDateStart.setHours(0, 0, 0, 0);
+    const targetDateEnd = new Date(targetDate);
+    targetDateEnd.setHours(23, 59, 59, 999);
+
+    // Parallel fetch: students, existing daily attendance, session log, past 7 days logs, and calendar events
+    const [rawStudents, dailyRecords, sessionRecord, recentRecords, calendarHoliday] = await Promise.all([
       Student.find({ classId, status: 'active' })
         .select('_id fullName admissionNo rollNumber gender studentCode parentIds'),
       DailyAttendance.find({
@@ -1420,7 +1518,23 @@ exports.getDailyAttendanceByClass = async (req, res) => {
         session
       })
       .sort({ dateString: -1 })
-      .limit(500)
+      .limit(500),
+      SchoolCalendar.findOne({
+        $or: [
+          {
+            startDate: { $lte: targetDateEnd },
+            endDate: { $gte: targetDateStart }
+          },
+          {
+            startDate: { $gte: targetDateStart, $lte: targetDateEnd }
+          }
+        ],
+        $or: [
+          { isHoliday: true },
+          { schoolClosed: true },
+          { eventType: { $in: ['public_holiday', 'vacation', 'restricted_holiday', 'school_event'] } }
+        ]
+      })
     ]);
 
     const allStudents = sortStudents(rawStudents, sortPreference);
@@ -1499,6 +1613,14 @@ exports.getDailyAttendanceByClass = async (req, res) => {
       isSubmitted,
       markedBy: sessionRecord?.markedBy?.name || null,
       submittedAt: sessionRecord?.submittedAt || null,
+      holiday: calendarHoliday ? {
+        title: calendarHoliday.title,
+        eventType: calendarHoliday.eventType,
+        isHoliday: calendarHoliday.isHoliday,
+        schoolClosed: calendarHoliday.schoolClosed,
+        description: calendarHoliday.description || '',
+        color: calendarHoliday.color || '#f59e0b'
+      } : null,
       stats: {
         totalStudents,
         presentCount,
@@ -1535,11 +1657,16 @@ exports.getDailyAttendanceMatrix = async (req, res) => {
 
     const sortPreference = classObj?.studentSortPreference || 'alphabetic';
 
-    // Days in this month
-    const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+    // Days in this month & holidays/working days helper
+    const {
+      holidayMap,
+      holidaysList,
+      totalWorkingDays,
+      daysInMonth
+    } = await getMonthHolidaysAndWorkingDays(targetYear, targetMonth);
 
-    // Parallel query for students, daily records, template, and sessions
-    const [rawStudents, dailyRecords, template, sessionRecords] = await Promise.all([
+    // Parallel query for students, daily records, and sessions
+    const [rawStudents, dailyRecords, sessionRecords] = await Promise.all([
       Student.find({ classId, status: 'active' })
         .select('_id fullName admissionNo rollNumber gender studentCode'),
       DailyAttendance.find({
@@ -1547,12 +1674,6 @@ exports.getDailyAttendanceMatrix = async (req, res) => {
         year: targetYear,
         month: targetMonth,
         session: 'full_day'
-      }),
-      AttendanceTemplate.findOne({
-        $or: [{ classId: classId }, { classId: null }],
-        year: targetYear,
-        month: targetMonth,
-        isActive: true
       }),
       DailyAttendanceSession.find({
         classId,
@@ -1566,15 +1687,6 @@ exports.getDailyAttendanceMatrix = async (req, res) => {
 
     // Days marked
     const markedDatesSet = new Set(sessionRecords.map(s => s.dateString));
-
-    // Holiday map
-    const holidayMap = new Map();
-    (template?.holidays || []).forEach(h => {
-      const hDate = new Date(h.date);
-      if (hDate.getMonth() + 1 === targetMonth && hDate.getFullYear() === targetYear) {
-        holidayMap.set(hDate.getDate(), h.name);
-      }
-    });
 
     // Build map: studentId -> { day: { status, remarks } }
     const studentDayMap = new Map();
@@ -1646,9 +1758,9 @@ exports.getDailyAttendanceMatrix = async (req, res) => {
       year: targetYear,
       month: targetMonth,
       daysInMonth,
-      totalWorkingDays: markedDatesSet.size || template?.totalWorkingDays || 25,
+      totalWorkingDays: totalWorkingDays,
       markedDaysCount: markedDatesSet.size,
-      holidays: template?.holidays || [],
+      holidays: holidaysList,
       students: matrixRows
     });
   } catch (error) {
