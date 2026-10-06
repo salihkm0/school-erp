@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_redux/flutter_redux.dart';
 import 'package:intl/intl.dart';
 import 'package:school_management/models/fee_model.dart';
-import 'package:school_management/models/parent_models.dart';
+import 'package:school_management/models/dashboard_model.dart';
 import 'package:school_management/services/fee_service.dart';
 import 'package:school_management/store/app_state.dart';
 import 'package:school_management/utils/theme.dart';

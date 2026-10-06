@@ -150,6 +150,8 @@ class ApiService {
 
   SocketService get socketService => _socketService;
 
+  Dio get dio => _dio;
+
   void setStore(Store<AppState> store) {
     _store = store;
   }
