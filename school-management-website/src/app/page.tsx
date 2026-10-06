@@ -6,6 +6,7 @@ import Hero from '@/components/Hero';
 import CoreModulesGrid from '@/components/CoreModulesGrid';
 import EventsShowcase from '@/components/EventsShowcase';
 import TimetableShowcase from '@/components/TimetableShowcase';
+import FeeManagementShowcase from '@/components/FeeManagementShowcase';
 import FeatureExplorer from '@/components/FeatureExplorer';
 import DeepDiveFeatures from '@/components/DeepDiveFeatures';
 import RoiCalculator from '@/components/RoiCalculator';
@@ -49,6 +50,9 @@ export default function Home() {
 
       {/* Flagship New Section: Institutional Timetable & Clash Engine */}
       <TimetableShowcase onOpenDemoModal={openDemoModal} />
+
+      {/* Flagship New Section: Fast Fee Collection & Automated Recovery */}
+      <FeeManagementShowcase onOpenDemoModal={openDemoModal} />
 
       {/* Interactive Academic & Examination Deep Dive */}
       <FeatureExplorer />

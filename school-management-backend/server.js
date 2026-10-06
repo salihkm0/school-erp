@@ -66,6 +66,7 @@ const administrationRoutes = require('./src/routes/administrationRoutes');
 const appConfigRoutes = require('./src/routes/appConfigRoutes');
 const festEventRoutes = require('./src/routes/festEventRoutes');
 const timetableRoutes = require('./src/routes/timetableRoutes');
+const feeRoutes = require('./src/routes/feeRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -310,6 +311,9 @@ app.use('/api/events', festEventRoutes);
 
 // Advanced Timetable System
 app.use('/api/timetable', timetableRoutes);
+
+// Advanced Fee Management System
+app.use('/api/fees', feeRoutes);
 
 
 // Health check endpoint

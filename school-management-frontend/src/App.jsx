@@ -21,6 +21,7 @@ import NotificationsPage from './pages/NotificationsPage'
 import SettingsPage from './pages/SettingsPage'
 import EventsPage from './pages/EventsPage'
 import TimetablePage from './pages/TimetablePage'
+import FeeManagementPage from './pages/FeeManagementPage'
 import PdfReports from './components/pdf/PdfReports'
 import { checkAuth } from './store/slices/authSlice'
 import { fetchSchoolProfile } from './store/slices/schoolProfileSlice'
@@ -47,6 +48,7 @@ import HistoricalRecordsFlow from './pages/admin/HistoricalRecords/HistoricalRec
 import MyChildrenPage from './pages/parent/MyChildrenPage'
 import MyChildAttendancePage from './pages/parent/MyChildAttendancePage'
 import MyChildResultsPage from './pages/parent/MyChildResultsPage'
+import MyChildFeesPage from './pages/parent/MyChildFeesPage'
 
 // Historical records (standalone — does not affect main system)
 import HistoricalImport from './pages/admin/HistoricalImport'
@@ -226,6 +228,7 @@ function App() {
           <Route path="duties/*" element={<DutiesPage />} />
           <Route path="events/*" element={<EventsPage />} />
           <Route path="timetable/*" element={<TimetablePage />} />
+          <Route path="fees/*" element={<FeeManagementPage />} />
           <Route path="parents/*" element={<ParentsPage />} />
           <Route path="subjects/*" element={<SubjectsPage />} />
           <Route path="reports/*" element={<ReportsPage />} />
@@ -253,6 +256,7 @@ function App() {
           <Route path="my-children" element={<MyChildrenPage />} />
           <Route path="my-child-attendance" element={<MyChildAttendancePage />} />
           <Route path="my-child-results" element={<MyChildResultsPage />} />  
+          <Route path="my-child-fees" element={<MyChildFeesPage />} />  
 
           {/* Historical import — admin only */}
           <Route path="historical-records/*" element={<HistoricalRecordsFlow />} />

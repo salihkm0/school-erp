@@ -22,6 +22,7 @@ import {
   TableCellsIcon,
   TrophyIcon,
   ClockIcon,
+  BanknotesIcon,
 } from '@heroicons/react/24/outline'
 import { logout } from '../../store/slices/authSlice'
 import { disconnectSocket } from '../../services/socketService'
@@ -32,6 +33,7 @@ const menuItems = [
 
   // Common routes for all roles
   { path: '/dashboard', name: 'Dashboard', icon: HomeIcon, roles: ['admin', 'staff', 'parent'] },
+  { path: '/fees', name: 'Fees & Billing', icon: BanknotesIcon, roles: ['admin', 'staff'] },
   { path: '/timetable', name: 'Timetable', icon: ClockIcon, roles: ['admin', 'staff', 'parent'] },
   { path: '/events', name: 'Events & Fests', icon: TrophyIcon, roles: ['admin', 'staff', 'parent'] },
 
@@ -62,7 +64,8 @@ const menuItems = [
   // Parent-specific routes
   { path: '/my-children', name: 'My Children', icon: UserGroupIcon, roles: ['parent'] },
   { path: '/my-child-attendance', name: 'Attendance', icon: CalendarIcon, roles: ['parent'] },
-  { path: 'my-child-results', name: 'Results', icon: ChartBarIcon, roles: ['parent'] },
+  { path: '/my-child-results', name: 'Results', icon: ChartBarIcon, roles: ['parent'] },
+  { path: '/my-child-fees', name: 'Fee Details', icon: BanknotesIcon, roles: ['parent'] },
 
   // common routes
   { path: '/notifications', name: 'Notifications', icon: BellIcon, roles: ['admin', 'staff', 'parent'] },

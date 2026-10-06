@@ -34,6 +34,7 @@ export default function Navbar({ onOpenDemoModal, onOpenBrochureModal }: NavbarP
 
   const navLinks = [
     { label: 'Campus Modules', href: '/#modules' },
+    { label: 'Fee Management', href: '/#fee-management' },
     { label: 'Timetable', href: '/#timetable-suite' },
     { label: 'Exam Engine', href: '/#features' },
     { label: 'Sports & Arts', href: '/#events-sports' },
