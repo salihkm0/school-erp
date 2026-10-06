@@ -9,20 +9,24 @@ const { sortStudents } = require('../utils/studentSorter');
 
 // Helper function to resolve holidays and working days from SchoolCalendar + AttendanceTemplate
 async function getMonthHolidaysAndWorkingDays(year, month) {
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
-  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+  const targetYear = parseInt(year, 10);
+  const targetMonth = parseInt(month, 10);
+  const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+
+  // Search date range with 2-day buffer for any UTC/local timezone shifts
+  const startOfMonth = new Date(targetYear, targetMonth - 1, 1, 0, 0, 0, 0);
+  const endOfMonth = new Date(targetYear, targetMonth, 0, 23, 59, 59, 999);
+  const searchStart = new Date(startOfMonth.getTime() - (2 * 86400000));
+  const searchEnd = new Date(endOfMonth.getTime() + (2 * 86400000));
 
   const [calendarEvents, template] = await Promise.all([
     SchoolCalendar.find({
-      $or: [
-        { startDate: { $lte: monthEnd }, endDate: { $gte: monthStart } },
-        { startDate: { $gte: monthStart, $lte: monthEnd } }
-      ]
+      startDate: { $lte: searchEnd },
+      endDate: { $gte: searchStart }
     }),
     AttendanceTemplate.findOne({
-      year,
-      month,
+      year: targetYear,
+      month: targetMonth,
       isActive: true
     })
   ]);
@@ -31,28 +35,31 @@ async function getMonthHolidaysAndWorkingDays(year, month) {
 
   // 1. Process events from SchoolCalendar (Primary source)
   (calendarEvents || []).forEach(evt => {
-    const isOff = evt.isHoliday || evt.schoolClosed || ['public_holiday', 'vacation', 'restricted_holiday'].includes(evt.eventType);
+    // Treat public holidays, vacations, restricted holidays and events as holidays/off-days
+    const isOff = ['public_holiday', 'vacation', 'restricted_holiday', 'school_event'].includes(evt.type) || evt.type !== 'special_working_day';
     if (isOff) {
       const sDate = new Date(evt.startDate);
       const eDate = evt.endDate ? new Date(evt.endDate) : new Date(evt.startDate);
 
-      const startDay = (sDate.getFullYear() === year && sDate.getMonth() + 1 === month)
-        ? sDate.getDate()
-        : (sDate < monthStart ? 1 : daysInMonth + 1);
+      let cur = new Date(sDate);
+      cur.setHours(12, 0, 0, 0);
+      const endN = new Date(eDate);
+      endN.setHours(12, 0, 0, 0);
 
-      const endDay = (eDate.getFullYear() === year && eDate.getMonth() + 1 === month)
-        ? eDate.getDate()
-        : (eDate > monthEnd ? daysInMonth : 0);
-
-      for (let d = Math.max(1, startDay); d <= Math.min(daysInMonth, endDay); d++) {
-        holidayMap.set(d, {
-          name: evt.title,
-          title: evt.title,
-          eventType: evt.eventType,
-          isHoliday: true,
-          color: evt.color || '#f59e0b',
-          description: evt.description || ''
-        });
+      while (cur <= endN) {
+        if (cur.getFullYear() === targetYear && (cur.getMonth() + 1) === targetMonth) {
+          const d = cur.getDate();
+          holidayMap.set(d, {
+            name: evt.title,
+            title: evt.title,
+            type: evt.type,
+            eventType: evt.type,
+            isHoliday: ['public_holiday', 'vacation', 'restricted_holiday'].includes(evt.type),
+            color: evt.color || '#f59e0b',
+            description: evt.description || ''
+          });
+        }
+        cur.setDate(cur.getDate() + 1);
       }
     }
   });
@@ -60,11 +67,12 @@ async function getMonthHolidaysAndWorkingDays(year, month) {
   // 2. Supplement with legacy AttendanceTemplate holidays
   (template?.holidays || []).forEach(h => {
     const hDate = new Date(h.date);
-    if (hDate.getMonth() + 1 === month && hDate.getFullYear() === year) {
+    if (hDate.getMonth() + 1 === targetMonth && hDate.getFullYear() === targetYear) {
       if (!holidayMap.has(hDate.getDate())) {
         holidayMap.set(hDate.getDate(), {
           name: h.name,
           title: h.name,
+          type: 'public_holiday',
           eventType: 'public_holiday',
           isHoliday: true,
           color: '#f59e0b',
@@ -77,7 +85,7 @@ async function getMonthHolidaysAndWorkingDays(year, month) {
   let sundaysCount = 0;
   let holidaysNotOnSundayCount = 0;
   for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(year, month - 1, d).getDay();
+    const dow = new Date(targetYear, targetMonth - 1, d).getDay();
     if (dow === 0) {
       sundaysCount++;
     } else if (holidayMap.has(d)) {
@@ -1493,14 +1501,12 @@ exports.getDailyAttendanceByClass = async (req, res) => {
 
     const sortPreference = classObj?.studentSortPreference || 'alphabetic';
 
-    const targetDate = new Date(targetDateStr);
-    const targetDateStart = new Date(targetDate);
-    targetDateStart.setHours(0, 0, 0, 0);
-    const targetDateEnd = new Date(targetDate);
-    targetDateEnd.setHours(23, 59, 59, 999);
+    const [y, m, d] = targetDateStr.split('-').map(Number);
+    const searchStart = new Date(y, m - 1, d - 1, 0, 0, 0, 0);
+    const searchEnd = new Date(y, m - 1, d + 1, 23, 59, 59, 999);
 
     // Parallel fetch: students, existing daily attendance, session log, past 7 days logs, and calendar events
-    const [rawStudents, dailyRecords, sessionRecord, recentRecords, calendarHoliday] = await Promise.all([
+    const [rawStudents, dailyRecords, sessionRecord, recentRecords, candidateEvents] = await Promise.all([
       Student.find({ classId, status: 'active' })
         .select('_id fullName admissionNo rollNumber gender studentCode parentIds'),
       DailyAttendance.find({
@@ -1519,23 +1525,36 @@ exports.getDailyAttendanceByClass = async (req, res) => {
       })
       .sort({ dateString: -1 })
       .limit(500),
-      SchoolCalendar.findOne({
-        $or: [
-          {
-            startDate: { $lte: targetDateEnd },
-            endDate: { $gte: targetDateStart }
-          },
-          {
-            startDate: { $gte: targetDateStart, $lte: targetDateEnd }
-          }
-        ],
-        $or: [
-          { isHoliday: true },
-          { schoolClosed: true },
-          { eventType: { $in: ['public_holiday', 'vacation', 'restricted_holiday', 'school_event'] } }
-        ]
+      SchoolCalendar.find({
+        startDate: { $lte: searchEnd },
+        endDate: { $gte: searchStart }
       })
     ]);
+
+    let calendarHoliday = null;
+    for (const evt of candidateEvents) {
+      const isOff = ['public_holiday', 'vacation', 'restricted_holiday', 'school_event'].includes(evt.type) || evt.type !== 'special_working_day';
+      if (isOff) {
+        let cur = new Date(evt.startDate);
+        cur.setHours(12, 0, 0, 0);
+        const endN = new Date(evt.endDate || evt.startDate);
+        endN.setHours(12, 0, 0, 0);
+
+        const targetLocal = new Date(y, m - 1, d, 12, 0, 0, 0);
+        if (targetLocal >= cur && targetLocal <= endN) {
+          calendarHoliday = {
+            title: evt.title,
+            type: evt.type,
+            eventType: evt.type,
+            isHoliday: ['public_holiday', 'vacation', 'restricted_holiday'].includes(evt.type),
+            schoolClosed: evt.type !== 'special_working_day',
+            description: evt.description || '',
+            color: evt.color || '#f59e0b'
+          };
+          break;
+        }
+      }
+    }
 
     const allStudents = sortStudents(rawStudents, sortPreference);
 
