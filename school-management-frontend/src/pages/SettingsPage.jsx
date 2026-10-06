@@ -6,9 +6,11 @@ import AcademicYearSettings from '../components/settings/AcademicYearSettings'
 import ProfileSettings from '../components/settings/ProfileSettings'
 import SystemSettings from '../components/settings/SystemSettings'
 import SchoolProfileSettings from '../components/settings/SchoolProfileSettings'
+import SchoolCalendarSettings from '../components/settings/SchoolCalendarSettings'
 import { 
   UserCircleIcon, 
   CalendarIcon, 
+  CalendarDaysIcon,
   Cog6ToothIcon,
   ShieldCheckIcon,
   BellIcon,
@@ -25,7 +27,8 @@ const SettingsPage = () => {
   const allTabs = [
     { id: 'profile', name: 'Profile', description: 'Manage your personal information', icon: UserCircleIcon, path: '/settings/profile', roles: ['admin', 'staff', 'parent'] },
     { id: 'school-profile', name: 'School Profile & Branding', description: 'Configure school name, address, logos & documents', icon: BuildingOffice2Icon, path: '/settings/school-profile', roles: ['admin'] },
-    { id: 'academic-years', name: 'Academic Years', description: 'Configure academic calendar', icon: CalendarIcon, path: '/settings/academic-years', roles: ['admin'] },
+    { id: 'calendar', name: 'School Calendar & Holidays', description: 'Configure public holidays, vacations & school events', icon: CalendarDaysIcon, path: '/settings/calendar', roles: ['admin', 'staff'] },
+    { id: 'academic-years', name: 'Academic Years', description: 'Configure academic years & terms', icon: CalendarIcon, path: '/settings/academic-years', roles: ['admin'] },
     { id: 'system', name: 'System', description: 'System-wide configurations', icon: Cog6ToothIcon, path: '/settings/system', roles: ['admin'] }
   ]
   
@@ -140,6 +143,7 @@ const SettingsPage = () => {
           <Route index element={<ProfileSettings />} />
           <Route path="profile" element={<ProfileSettings />} />
           <Route path="school-profile" element={userRole === 'admin' ? <SchoolProfileSettings /> : <ProfileSettings />} />
+          <Route path="calendar" element={<SchoolCalendarSettings />} />
           <Route path="academic-years" element={userRole === 'admin' ? <AcademicYearSettings /> : <ProfileSettings />} />
           <Route path="system" element={userRole === 'admin' ? <SystemSettings /> : <ProfileSettings />} />
         </Routes>
