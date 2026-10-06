@@ -54,7 +54,11 @@ import 'package:school_management/screens/marks/marks_entry_screen.dart';
 import 'package:school_management/screens/parent/my_children_page.dart';
 import 'package:school_management/screens/parent/my_child_attendance_page.dart';
 import 'package:school_management/screens/parent/my_child_results_page.dart';
+import 'package:school_management/screens/parent/my_child_fees_page.dart';
 import 'package:school_management/models/parent_models.dart';
+
+// Calendar & Events Screens
+import 'package:school_management/screens/calendar/school_calendar_screen.dart';
 
 // Staff Screens
 import 'package:school_management/screens/staff/my_classes_page.dart';
@@ -362,11 +366,42 @@ Route<dynamic>? generateAppRoute(RouteSettings settings) {
           builder: (_) => const EventsScreen(),
           settings: settings,
         );
+      case '/calendar':
+        return MaterialPageRoute(
+          builder: (_) => const SchoolCalendarScreen(),
+          settings: settings,
+        );
       
       // ==================== PARENT ROUTES ====================
       case '/my-children':
         return MaterialPageRoute(
           builder: (_) => const MyChildrenPage(),
+          settings: settings,
+        );
+      case '/my-child-fees':
+      case '/fees':
+        final child = settings.arguments as StudentChild?;
+        if (child != null) {
+          return MaterialPageRoute(
+            builder: (_) => MyChildFeesPage(
+              initialStudentId: child.id,
+              studentName: child.fullName,
+            ),
+            settings: settings,
+          );
+        }
+        final args = settings.arguments as Map<String, String>?;
+        if (args != null) {
+          return MaterialPageRoute(
+            builder: (_) => MyChildFeesPage(
+              initialStudentId: args['studentId'],
+              studentName: args['studentName'],
+            ),
+            settings: settings,
+          );
+        }
+        return MaterialPageRoute(
+          builder: (_) => const MyChildFeesPage(),
           settings: settings,
         );
       case '/my-child-attendance':

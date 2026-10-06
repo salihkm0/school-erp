@@ -338,6 +338,15 @@ class _CustomDrawerState extends State<CustomDrawer> {
                             Navigator.pushNamed(context, '/duties');
                           },
                         ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.beach_access_outlined,
+                          title: 'School Calendar & Holidays',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/calendar');
+                          },
+                        ),
                       ],
                       
                       // ==================== STAFF MENU ====================
@@ -383,6 +392,16 @@ class _CustomDrawerState extends State<CustomDrawer> {
                             Navigator.pushNamed(context, '/staff/my-duties');
                           },
                         ),
+
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.beach_access_outlined,
+                          title: 'School Calendar',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/calendar');
+                          },
+                        ),
                       ],
                       
                       // ==================== PARENT MENU ====================
@@ -405,6 +424,24 @@ class _CustomDrawerState extends State<CustomDrawer> {
                           onTap: () {
                             Navigator.pop(context);
                             Navigator.pushNamed(context, '/my-child-attendance');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.account_balance_wallet_outlined,
+                          title: 'Fees & Receipts',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/my-child-fees');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.beach_access_outlined,
+                          title: 'School Calendar & Holidays',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/calendar');
                           },
                         ),
                         _buildModernMenuItem(

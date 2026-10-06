@@ -519,24 +519,58 @@ class _ParentDashboardState extends State<ParentDashboard> with SingleTickerProv
           // Quick Actions
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(
+            child: Column(
               children: [
-                Expanded(
-                  child: _buildActionButton(
-                    label: 'Attendance',
-                    icon: Icons.calendar_today,
-                    color: Colors.blue,
-                    onPressed: () => _navigateToAttendance(child),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildActionButton(
+                        label: 'Attendance',
+                        icon: Icons.calendar_today_rounded,
+                        color: Colors.blue,
+                        onPressed: () => _navigateToAttendance(child),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildActionButton(
+                        label: 'Results',
+                        icon: Icons.grade_rounded,
+                        color: Colors.purple,
+                        onPressed: () => _navigateToResults(child),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildActionButton(
-                    label: 'Results',
-                    icon: Icons.grade,
-                    color: Colors.purple,
-                    onPressed: () => _navigateToResults(child),
-                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildActionButton(
+                        label: 'Fees & Dues',
+                        icon: Icons.account_balance_wallet_rounded,
+                        color: const Color(0xFFD97706), // Amber
+                        onPressed: () {
+                          Navigator.pushNamed(
+                            context,
+                            '/my-child-fees',
+                            arguments: child,
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildActionButton(
+                        label: 'School Calendar',
+                        icon: Icons.beach_access_rounded,
+                        color: AppTheme.primaryColor,
+                        onPressed: () {
+                          Navigator.pushNamed(context, '/calendar');
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
