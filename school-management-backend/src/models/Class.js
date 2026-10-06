@@ -79,6 +79,9 @@ const ClassSchema = new mongoose.Schema({
       enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     },
     periods: [{
+      periodNumber: {
+        type: Number
+      },
       subjectId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Subject'
@@ -92,7 +95,13 @@ const ClassSchema = new mongoose.Schema({
       },
       startTime: String,
       endTime: String,
-      room: String
+      room: String,
+      type: {
+        type: String,
+        enum: ['regular', 'lab', 'activity', 'assembly', 'break', 'zero_period', 'substitution'],
+        default: 'regular'
+      },
+      notes: String
     }]
   }]
 }, {

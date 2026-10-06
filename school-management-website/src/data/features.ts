@@ -42,11 +42,15 @@ export const CORE_MODULES = [
   {
     id: "timetable-scheduling",
     title: "Timetable & Scheduling",
-    description: "Smart school timetable scheduler: create and manage periods with drag-and-drop, publish instantly, and keep every device in sync.",
+    description: "Smart institutional timetable cockpit: class schedules, teacher workload analyzer, real-time clash engine, and 1-click daily teacher substitution management.",
     icon: "Calendar",
     color: "blue",
-    badge: "Smart Scheduler",
-    features: ["Drag-and-drop master period & teacher timetable planner", "Automatic teacher conflict & workload balancing", "Instant real-time sync across web and teacher mobile apps"]
+    badge: "Clash & Substitution Engine",
+    features: [
+      "Real-time teacher & lab/room clash detection engine",
+      "Daily teacher absence logger with free-teacher auto-suggester",
+      "Teacher workload capacity tracker & high-DPI printable wall charts"
+    ]
   },
   {
     id: "communication-hub",

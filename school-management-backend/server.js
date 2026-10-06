@@ -65,6 +65,7 @@ const jobRoutes = require('./src/routes/jobRoutes');
 const administrationRoutes = require('./src/routes/administrationRoutes');
 const appConfigRoutes = require('./src/routes/appConfigRoutes');
 const festEventRoutes = require('./src/routes/festEventRoutes');
+const timetableRoutes = require('./src/routes/timetableRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -306,6 +307,9 @@ app.use('/api/app-config', appConfigRoutes);
 
 // Sports & Arts Events / Fests
 app.use('/api/events', festEventRoutes);
+
+// Advanced Timetable System
+app.use('/api/timetable', timetableRoutes);
 
 
 // Health check endpoint
