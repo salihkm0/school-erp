@@ -347,6 +347,15 @@ class _CustomDrawerState extends State<CustomDrawer> {
                             Navigator.pushNamed(context, '/calendar');
                           },
                         ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.workspace_premium_outlined,
+                          title: 'Kerala SSLC Results',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/sslc');
+                          },
+                        ),
                       ],
                       
                       // ==================== STAFF MENU ====================

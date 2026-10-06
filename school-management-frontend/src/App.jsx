@@ -29,6 +29,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const EventsPage = lazy(() => import('./pages/EventsPage'))
 const TimetablePage = lazy(() => import('./pages/TimetablePage'))
 const FeeManagementPage = lazy(() => import('./pages/FeeManagementPage'))
+const KeralaSSLCPage = lazy(() => import('./pages/KeralaSSLCPage'))
 const PdfReports = lazy(() => import('./components/pdf/PdfReports'))
 
 // Legal Pages
@@ -212,9 +213,10 @@ function App() {
             </PublicRoute>
           } />
 
-          {/* Public Legal Pages */}
+          {/* Public Legal & Result Pages */}
           <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+          <Route path="/sslc-result" element={<KeralaSSLCPage publicMode={true} />} />
           
           <Route path="/" element={
             <ProtectedRoute allowedRoles={['admin', 'staff', 'parent']}>
@@ -232,6 +234,7 @@ function App() {
             <Route path="events/*" element={<EventsPage />} />
             <Route path="timetable/*" element={<TimetablePage />} />
             <Route path="fees/*" element={<FeeManagementPage />} />
+            <Route path="sslc/*" element={<KeralaSSLCPage />} />
             <Route path="parents/*" element={<ParentsPage />} />
             <Route path="subjects/*" element={<SubjectsPage />} />
             <Route path="reports/*" element={<ReportsPage />} />

@@ -70,6 +70,7 @@ const feeRoutes = require('./src/routes/feeRoutes');
 const aiGradingRoutes = require('./src/routes/aiGradingRoutes');
 const whatsappBotRoutes = require('./src/routes/whatsappBotRoutes');
 const schoolCalendarRoutes = require('./src/routes/schoolCalendarRoutes');
+const keralaSSLCRoutes = require('./src/routes/keralaSSLCRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -326,6 +327,9 @@ app.use('/api/whatsapp', whatsappBotRoutes);
 
 // School Calendar & Holidays Management
 app.use('/api/calendar', schoolCalendarRoutes);
+
+// Kerala SSLC Portal & Result Module
+app.use('/api/sslc', keralaSSLCRoutes);
 
 
 // Health check endpoint

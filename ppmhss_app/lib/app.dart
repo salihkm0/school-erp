@@ -49,6 +49,7 @@ import 'package:school_management/screens/exams/exam_detail_screen.dart';
 
 // Marks Screens
 import 'package:school_management/screens/marks/marks_entry_screen.dart';
+import 'package:school_management/screens/marks/kerala_sslc_screen.dart';
 
 // Parent Screens
 import 'package:school_management/screens/parent/my_children_page.dart';
@@ -347,10 +348,17 @@ Route<dynamic>? generateAppRoute(RouteSettings settings) {
           settings: settings,
         );
       
-      // ==================== MARKS ROUTES ====================
+      // ==================== MARKS & SSLC ROUTES ====================
       case '/marks/entry':
         return MaterialPageRoute(
           builder: (_) => const MarksEntryScreen(),
+          settings: settings,
+        );
+      case '/sslc':
+      case '/kerala-sslc':
+      case '/sslc-results':
+        return MaterialPageRoute(
+          builder: (_) => const KeralaSSLCScreen(),
           settings: settings,
         );
       

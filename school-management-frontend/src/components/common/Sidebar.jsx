@@ -33,6 +33,7 @@ const menuItems = [
 
   // Common routes for all roles
   { path: '/dashboard', name: 'Dashboard', icon: HomeIcon, roles: ['admin', 'staff', 'parent'] },
+  { path: '/sslc', name: 'Kerala SSLC', icon: AcademicCapIcon, roles: ['admin', 'staff', 'parent'] },
   { path: '/fees', name: 'Fees & Billing', icon: BanknotesIcon, roles: ['admin', 'staff'] },
   { path: '/timetable', name: 'Timetable', icon: ClockIcon, roles: ['admin', 'staff', 'parent'] },
   { path: '/events', name: 'Events & Fests', icon: TrophyIcon, roles: ['admin', 'staff', 'parent'] },

@@ -304,6 +304,13 @@ class _MyChildResultsPageState extends State<MyChildResultsPage> with SingleTick
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.workspace_premium_outlined, color: Color(0xFFFBBF24)),
+            tooltip: 'Kerala SSLC Results Portal',
+            onPressed: () => Navigator.pushNamed(context, '/sslc'),
+          ),
+        ],
       ),
       body: _childrenLoading
           ? const Center(child: LoadingWidget())
