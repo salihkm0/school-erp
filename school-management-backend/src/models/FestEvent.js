@@ -116,10 +116,22 @@ const festEventSchema = new mongoose.Schema({
     groupSecond: { type: Number, default: 6 },
     groupThird: { type: Number, default: 2 },
     gradePoints: {
+      APlus: { type: Number, default: 7 },
       A: { type: Number, default: 5 },
       B: { type: Number, default: 3 },
       C: { type: Number, default: 1 },
     },
+    fourthPlacePoints: { type: Number, default: 0 },
+    consolationPoints: { type: Number, default: 0 },
+    participationPoints: { type: Number, default: 0 },
+  },
+  selectedChestTemplate: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ChestTemplate',
+  },
+  selectedPointTemplate: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PointTableTemplate',
   },
   titlesConfig: {
     maleChampionTitle: {

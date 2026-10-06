@@ -86,9 +86,14 @@ const eventService = {
     return response.data?.data;
   },
 
-  // Live Leaderboard
+  // Live Leaderboard & Detailed Point Table
   getLeaderboard: async (eventId) => {
     const response = await api.get(`/events/${eventId}/leaderboard`);
+    return response.data?.data;
+  },
+
+  getDetailedPointTable: async (eventId) => {
+    const response = await api.get(`/events/${eventId}/detailed-point-table`);
     return response.data?.data;
   },
 
@@ -155,6 +160,58 @@ const eventService = {
   reviewAppeal: async (eventId, appealId, reviewData) => {
     const response = await api.put(`/events/${eventId}/appeals/${appealId}/review`, reviewData);
     return response.data?.data;
+  },
+
+  // Chest Number Templates (CRUD & Choose)
+  getChestTemplates: async () => {
+    const response = await api.get('/events/templates/chest');
+    return response.data?.data;
+  },
+
+  createChestTemplate: async (templateData) => {
+    const response = await api.post('/events/templates/chest', templateData);
+    return response.data?.data;
+  },
+
+  updateChestTemplate: async (id, templateData) => {
+    const response = await api.put(`/events/templates/chest/${id}`, templateData);
+    return response.data?.data;
+  },
+
+  deleteChestTemplate: async (id) => {
+    const response = await api.delete(`/events/templates/chest/${id}`);
+    return response.data;
+  },
+
+  applyChestTemplate: async (eventId, templateId) => {
+    const response = await api.put(`/events/${eventId}/apply-chest-template/${templateId}`);
+    return response.data;
+  },
+
+  // Point Table Templates (CRUD & Choose)
+  getPointTemplates: async () => {
+    const response = await api.get('/events/templates/points');
+    return response.data?.data;
+  },
+
+  createPointTemplate: async (templateData) => {
+    const response = await api.post('/events/templates/points', templateData);
+    return response.data?.data;
+  },
+
+  updatePointTemplate: async (id, templateData) => {
+    const response = await api.put(`/events/templates/points/${id}`, templateData);
+    return response.data?.data;
+  },
+
+  deletePointTemplate: async (id) => {
+    const response = await api.delete(`/events/templates/points/${id}`);
+    return response.data;
+  },
+
+  applyPointTemplate: async (eventId, templateId) => {
+    const response = await api.put(`/events/${eventId}/apply-point-template/${templateId}`);
+    return response.data;
   },
 };
 

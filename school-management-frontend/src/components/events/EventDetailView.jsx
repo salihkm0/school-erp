@@ -4,6 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { fetchEventById } from '../../store/slices/eventSlice';
 import eventService from '../../services/eventService';
 import EventLeaderboardLive from './EventLeaderboardLive';
+import DetailedPointTableView from './DetailedPointTableView';
 import EventItemModal from './EventItemModal';
 import ParticipantRegisterModal from './ParticipantRegisterModal';
 import ResultEntryModal from './ResultEntryModal';
@@ -13,6 +14,8 @@ import IndividualChampionsView from './IndividualChampionsView';
 import PrintableBadgesView from './PrintableBadgesView';
 import PrintableCertificateModal from './PrintableCertificateModal';
 import AppealsManagerModal from './AppealsManagerModal';
+import ChestTemplateModal from './ChestTemplateModal';
+import PointTableManagerModal from './PointTableManagerModal';
 import {
   TrophyIcon,
   SparklesIcon,
@@ -32,6 +35,8 @@ import {
   IdentificationIcon,
   SpeakerWaveIcon,
   StarIcon,
+  TableCellsIcon,
+  CalculatorIcon,
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
@@ -60,6 +65,8 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
 
   const [isCertificateModalOpen, setIsCertificateModalOpen] = useState(false);
   const [isAppealsModalOpen, setIsAppealsModalOpen] = useState(false);
+  const [isChestTemplateModalOpen, setIsChestTemplateModalOpen] = useState(false);
+  const [isPointSchemeModalOpen, setIsPointSchemeModalOpen] = useState(false);
 
   const [isFullscreenLeaderboard, setIsFullscreenLeaderboard] = useState(false);
   const [isGeneratingChestNos, setIsGeneratingChestNos] = useState(false);
@@ -215,10 +222,24 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
             </button>
             <button
               type="button"
-              onClick={() => setIsCertificateModalOpen(true)}
+              onClick={() => setIsPointSchemeModalOpen(true)}
               className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-800/90 hover:bg-slate-700 text-amber-300 font-bold text-xs transition border border-amber-500/30 shadow-md"
             >
-              <PrinterIcon className="w-4 h-4" /> Merit Certificates
+              <CalculatorIcon className="w-4 h-4" /> Point Scheme Rules
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsChestTemplateModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-800/90 hover:bg-slate-700 text-purple-300 font-bold text-xs transition border border-purple-500/30 shadow-md"
+            >
+              <IdentificationIcon className="w-4 h-4" /> Chest Templates
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCertificateModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-bold text-xs transition border border-slate-700 shadow-md"
+            >
+              <PrinterIcon className="w-4 h-4" /> Certificates
             </button>
             <button
               type="button"
@@ -244,6 +265,7 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2">
         {[
           { id: 'leaderboard', label: 'Live Points Table', icon: TrophyIcon },
+          { id: 'point_table', label: 'Detailed Point Matrix', icon: TableCellsIcon },
           { id: 'champions', label: 'Champions & Titles', icon: StarIcon },
           { id: 'stages', label: 'Live Stage Manager', icon: SpeakerWaveIcon },
           { id: 'items', label: `Competitions (${items.length})`, icon: SparklesIcon },
@@ -280,12 +302,20 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
         />
       )}
 
-      {/* TAB 2: INDIVIDUAL CHAMPIONS & TITLES */}
+      {/* TAB 2: DETAILED POINT TABLE MATRIX */}
+      {activeTab === 'point_table' && (
+        <DetailedPointTableView
+          eventId={eventId}
+          isStaff={isStaffOrAdmin}
+        />
+      )}
+
+      {/* TAB 3: INDIVIDUAL CHAMPIONS & TITLES */}
       {activeTab === 'champions' && (
         <IndividualChampionsView eventId={eventId} />
       )}
 
-      {/* TAB 3: LIVE STAGE & VENUE CONTROLLER */}
+      {/* TAB 4: LIVE STAGE & VENUE CONTROLLER */}
       {activeTab === 'stages' && (
         <StageManagerLive
           eventId={eventId}
@@ -294,16 +324,17 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
         />
       )}
 
-      {/* TAB 4: PRINTABLE ID BADGES */}
+      {/* TAB 5: PRINTABLE ID BADGES */}
       {activeTab === 'badges' && (
         <PrintableBadgesView
           eventId={eventId}
           groups={event.groups || []}
           categories={event.categories || []}
+          isStaff={isStaffOrAdmin}
         />
       )}
 
-      {/* TAB 5: COMPETITION ITEMS */}
+      {/* TAB 6: COMPETITION ITEMS */}
       {activeTab === 'items' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl">
@@ -454,7 +485,7 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
         </div>
       )}
 
-      {/* TAB 6: PARTICIPANTS & AUTO CHEST GENERATOR */}
+      {/* TAB 7: PARTICIPANTS & AUTO CHEST GENERATOR */}
       {activeTab === 'participants' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl">
@@ -580,7 +611,7 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
         </div>
       )}
 
-      {/* TAB 7: PUBLISHED RESULTS */}
+      {/* TAB 8: PUBLISHED RESULTS */}
       {activeTab === 'results' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl">
@@ -750,6 +781,26 @@ const EventDetailView = ({ eventId, onBack, onEditEvent }) => {
           isOpen={isAppealsModalOpen}
           onClose={() => setIsAppealsModalOpen(false)}
           isAdmin={isStaffOrAdmin}
+        />
+      )}
+
+      {isChestTemplateModalOpen && (
+        <ChestTemplateModal
+          eventId={eventId}
+          currentTemplateId={event.selectedChestTemplate?._id || event.selectedChestTemplate}
+          isOpen={isChestTemplateModalOpen}
+          onClose={() => setIsChestTemplateModalOpen(false)}
+          onTemplateChosen={loadAllEventData}
+        />
+      )}
+
+      {isPointSchemeModalOpen && (
+        <PointTableManagerModal
+          eventId={eventId}
+          currentTemplateId={event.selectedPointTemplate?._id || event.selectedPointTemplate}
+          isOpen={isPointSchemeModalOpen}
+          onClose={() => setIsPointSchemeModalOpen(false)}
+          onSchemeApplied={loadAllEventData}
         />
       )}
     </div>

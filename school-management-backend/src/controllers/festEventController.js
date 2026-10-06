@@ -5,6 +5,8 @@ const EventParticipant = require('../models/EventParticipant');
 const EventResult = require('../models/EventResult');
 const EventScoreSheet = require('../models/EventScoreSheet');
 const EventAppeal = require('../models/EventAppeal');
+const ChestTemplate = require('../models/ChestTemplate');
+const PointTableTemplate = require('../models/PointTableTemplate');
 const Student = require('../models/Student');
 const { getSchoolProfile } = require('../utils/schoolProfileHelper');
 const { getIO } = require('../config/socket');
@@ -1619,4 +1621,444 @@ exports.reviewAppeal = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ==========================================
+// 11. CHEST NUMBER TEMPLATES (CRUD & CHOOSE)
+// ==========================================
+
+const DEFAULT_CHEST_TEMPLATES = [
+  {
+    name: 'Official Kalolsavam Arts Fest Badge',
+    description: 'Gold & Navy ornamental card with school emblem, large chest digits, house banner & QR code.',
+    layout: '6_per_page',
+    theme: 'royal_gold',
+    showPhoto: false,
+    showQr: true,
+    showBarcode: false,
+    showItemsList: true,
+    showSchoolLogo: true,
+    showHouseBanner: true,
+    fontSize: 'large',
+    isDefault: true,
+  },
+  {
+    name: 'Classic Jersey Sports Meet Card',
+    description: 'Giant bold high-visibility numbers designed for safety-pinned sports jerseys and track events.',
+    layout: 'single_jersey',
+    theme: 'sport_bold',
+    showPhoto: false,
+    showQr: false,
+    showBarcode: false,
+    showItemsList: false,
+    showSchoolLogo: true,
+    showHouseBanner: true,
+    fontSize: 'extra_large',
+    isDefault: true,
+  },
+  {
+    name: 'Lanyard Photo ID Badge',
+    description: 'Vertical format with student photo, admission details, house ribbon and barcode verification.',
+    layout: '4_per_page',
+    theme: 'modern_neon',
+    showPhoto: true,
+    showQr: true,
+    showBarcode: true,
+    showItemsList: true,
+    showSchoolLogo: true,
+    showHouseBanner: true,
+    fontSize: 'medium',
+    isDefault: true,
+  },
+  {
+    name: 'Compact Eco Tag (8 per A4 Sheet)',
+    description: 'Cost-effective high-density print sheet layout for large school enrollments.',
+    layout: '8_per_page',
+    theme: 'minimal_clean',
+    showPhoto: false,
+    showQr: true,
+    showBarcode: false,
+    showItemsList: false,
+    showSchoolLogo: true,
+    showHouseBanner: true,
+    fontSize: 'medium',
+    isDefault: true,
+  },
+];
+
+exports.getChestTemplates = async (req, res) => {
+  try {
+    let templates = await ChestTemplate.find().sort({ isDefault: -1, createdAt: -1 });
+    if (templates.length === 0) {
+      // Seed default templates
+      templates = await ChestTemplate.insertMany(DEFAULT_CHEST_TEMPLATES);
+    }
+    res.json({ success: true, data: templates });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.createChestTemplate = async (req, res) => {
+  try {
+    const template = await ChestTemplate.create({
+      ...req.body,
+      createdBy: req.user?._id,
+      isDefault: false,
+    });
+    res.status(201).json({ success: true, message: 'Chest template created successfully', data: template });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateChestTemplate = async (req, res) => {
+  try {
+    const template = await ChestTemplate.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body },
+      { new: true }
+    );
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Template not found' });
+    }
+    res.json({ success: true, message: 'Chest template updated', data: template });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteChestTemplate = async (req, res) => {
+  try {
+    const template = await ChestTemplate.findById(req.params.id);
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Template not found' });
+    }
+    if (template.isDefault) {
+      return res.status(400).json({ success: false, message: 'System default templates cannot be deleted' });
+    }
+    await ChestTemplate.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Template deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applyChestTemplate = async (req, res) => {
+  try {
+    const { id: eventId, templateId } = req.params;
+    const template = await ChestTemplate.findById(templateId);
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Chest template not found' });
+    }
+
+    const event = await FestEvent.findByIdAndUpdate(
+      eventId,
+      { selectedChestTemplate: templateId },
+      { new: true }
+    ).populate('selectedChestTemplate');
+
+    res.json({
+      success: true,
+      message: `Template "${template.name}" chosen for event badges`,
+      data: event,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 12. POINT TABLE TEMPLATES (CRUD & CHOOSE)
+// ==========================================
+
+const DEFAULT_POINT_TEMPLATES = [
+  {
+    name: 'Standard Kerala School Kalolsavam Rules',
+    description: 'Official 5-3-1 individual and 10-6-2 group points with Grade bonus: A (5 pts), B (3 pts), C (1 pt).',
+    eventType: 'arts',
+    individualFirst: 5,
+    individualSecond: 3,
+    individualThird: 1,
+    groupFirst: 10,
+    groupSecond: 6,
+    groupThird: 2,
+    gradePoints: { APlus: 7, A: 5, B: 3, C: 1 },
+    fourthPlacePoints: 0,
+    consolationPoints: 0,
+    isDefault: true,
+  },
+  {
+    name: 'National Athletics & Sports Meet Standard',
+    description: 'Standard track and field scoring (Individual: 5-3-1, Relays/Team: 10-6-2, 4th place: 0).',
+    eventType: 'sports',
+    individualFirst: 5,
+    individualSecond: 3,
+    individualThird: 1,
+    groupFirst: 10,
+    groupSecond: 6,
+    groupThird: 2,
+    gradePoints: { APlus: 0, A: 0, B: 0, C: 0 },
+    fourthPlacePoints: 0,
+    consolationPoints: 0,
+    isDefault: true,
+  },
+  {
+    name: 'CBSE Sahodaya Youth Fest Scheme',
+    description: 'CBSE festival scheme (Individual 10-7-5, Group 15-10-5, A Grade +7 pts, B Grade +5 pts).',
+    eventType: 'cultural',
+    individualFirst: 10,
+    individualSecond: 7,
+    individualThird: 5,
+    groupFirst: 15,
+    groupSecond: 10,
+    groupThird: 5,
+    gradePoints: { APlus: 10, A: 7, B: 5, C: 3 },
+    fourthPlacePoints: 2,
+    consolationPoints: 1,
+    isDefault: true,
+  },
+  {
+    name: 'Inter-House Championship 7-5-3-1 Scheme',
+    description: 'Weighted championship scheme with 4th place points (Individual 7-5-3-1, Group 14-10-6-2).',
+    eventType: 'general',
+    individualFirst: 7,
+    individualSecond: 5,
+    individualThird: 3,
+    groupFirst: 14,
+    groupSecond: 10,
+    groupThird: 6,
+    gradePoints: { APlus: 5, A: 3, B: 2, C: 1 },
+    fourthPlacePoints: 1,
+    consolationPoints: 0,
+    isDefault: true,
+  },
+];
+
+exports.getPointTemplates = async (req, res) => {
+  try {
+    let templates = await PointTableTemplate.find().sort({ isDefault: -1, createdAt: -1 });
+    if (templates.length === 0) {
+      // Seed default templates
+      templates = await PointTableTemplate.insertMany(DEFAULT_POINT_TEMPLATES);
+    }
+    res.json({ success: true, data: templates });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.createPointTemplate = async (req, res) => {
+  try {
+    const template = await PointTableTemplate.create({
+      ...req.body,
+      createdBy: req.user?._id,
+      isDefault: false,
+    });
+    res.status(201).json({ success: true, message: 'Point Table rule created successfully', data: template });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updatePointTemplate = async (req, res) => {
+  try {
+    const template = await PointTableTemplate.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body },
+      { new: true }
+    );
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Template not found' });
+    }
+    res.json({ success: true, message: 'Point Table rule updated', data: template });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deletePointTemplate = async (req, res) => {
+  try {
+    const template = await PointTableTemplate.findById(req.params.id);
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Template not found' });
+    }
+    if (template.isDefault) {
+      return res.status(400).json({ success: false, message: 'System default templates cannot be deleted' });
+    }
+    await PointTableTemplate.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Template deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applyPointTemplate = async (req, res) => {
+  try {
+    const { id: eventId, templateId } = req.params;
+    const template = await PointTableTemplate.findById(templateId);
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Point Table rule not found' });
+    }
+
+    const newPointSystem = {
+      individualFirst: template.individualFirst,
+      individualSecond: template.individualSecond,
+      individualThird: template.individualThird,
+      groupFirst: template.groupFirst,
+      groupSecond: template.groupSecond,
+      groupThird: template.groupThird,
+      fourthPlacePoints: template.fourthPlacePoints || 0,
+      consolationPoints: template.consolationPoints || 0,
+      participationPoints: template.participationPoints || 0,
+      gradePoints: template.gradePoints || { APlus: 7, A: 5, B: 3, C: 1 },
+    };
+
+    const event = await FestEvent.findByIdAndUpdate(
+      eventId,
+      {
+        selectedPointTemplate: templateId,
+        pointSystem: newPointSystem,
+      },
+      { new: true }
+    );
+
+    // Recalculate all scores with the new point system
+    await recalculateEventPoints(eventId);
+
+    // Broadcast updated points table
+    const leaderboard = await getLeaderboardData(eventId);
+    broadcastEventUpdate('event_points_updated', {
+      eventId,
+      leaderboard,
+      message: `Applied Point Scheme: ${template.name}! Scores recalculated.`,
+    });
+
+    res.json({
+      success: true,
+      message: `Point Scheme "${template.name}" applied and all scores recalculated!`,
+      data: { event, leaderboard },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 13. DETAILED POINT TABLE CROSS-TABULATION MATRIX
+// ==========================================
+
+exports.getDetailedPointTable = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const event = await FestEvent.findById(eventId)
+      .populate('selectedPointTemplate')
+      .populate('selectedChestTemplate');
+
+    if (!event) {
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+
+    const items = await EventItem.find({ event: eventId });
+    const results = await EventResult.find({ event: eventId, published: true })
+      .populate('item', 'name code category itemType stageVenue');
+
+    // Houses
+    const groups = event.groups || [];
+
+    // 1. Matrix: House × Category
+    const categoryMatrix = {};
+    (event.categories || []).forEach((cat) => {
+      categoryMatrix[cat] = {};
+      groups.forEach((g) => {
+        categoryMatrix[cat][g._id.toString()] = {
+          points: 0,
+          gold: 0,
+          silver: 0,
+          bronze: 0,
+        };
+      });
+    });
+
+    // 2. Matrix: House × Item Type (Individual vs Group)
+    const itemTypeMatrix = {
+      individual: {},
+      group: {},
+    };
+    groups.forEach((g) => {
+      itemTypeMatrix.individual[g._id.toString()] = 0;
+      itemTypeMatrix.group[g._id.toString()] = 0;
+    });
+
+    // 3. Item-by-Item Breakdown
+    const itemBreakdown = [];
+
+    results.forEach((r) => {
+      const itm = r.item;
+      const cat = itm?.category || 'General';
+      const type = itm?.itemType || 'individual';
+
+      const houseItemPoints = {};
+      groups.forEach((g) => {
+        houseItemPoints[g._id.toString()] = 0;
+      });
+
+      (r.winners || []).forEach((w) => {
+        const gId = w.group?.toString();
+        const pts = w.pointsAwarded || 0;
+
+        if (gId && categoryMatrix[cat] && categoryMatrix[cat][gId]) {
+          categoryMatrix[cat][gId].points += pts;
+          if (w.position === 1) categoryMatrix[cat][gId].gold += 1;
+          if (w.position === 2) categoryMatrix[cat][gId].silver += 1;
+          if (w.position === 3) categoryMatrix[cat][gId].bronze += 1;
+        }
+
+        if (gId && itemTypeMatrix[type] && itemTypeMatrix[type][gId] !== undefined) {
+          itemTypeMatrix[type][gId] += pts;
+        }
+
+        if (gId && houseItemPoints[gId] !== undefined) {
+          houseItemPoints[gId] += pts;
+        }
+      });
+
+      itemBreakdown.push({
+        itemId: itm?._id,
+        itemName: itm?.name,
+        itemCode: itm?.code,
+        category: cat,
+        itemType: type,
+        winners: r.winners,
+        housePoints: houseItemPoints,
+      });
+    });
+
+    // Sort groups by overall points
+    const sortedGroups = [...groups].sort((a, b) => b.points - a.points);
+
+    res.json({
+      success: true,
+      data: {
+        event: {
+          _id: event._id,
+          name: event.name,
+          eventType: event.eventType,
+          pointSystem: event.pointSystem,
+          selectedPointTemplate: event.selectedPointTemplate,
+          selectedChestTemplate: event.selectedChestTemplate,
+          categories: event.categories,
+        },
+        groups: sortedGroups,
+        categoryMatrix,
+        itemTypeMatrix,
+        itemBreakdown,
+        totalItemsCount: items.length,
+        completedItemsCount: results.length,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 

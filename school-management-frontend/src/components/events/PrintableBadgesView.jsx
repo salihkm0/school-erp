@@ -6,22 +6,40 @@ import {
   ArrowPathIcon,
   IdentificationIcon,
   QrCodeIcon,
+  SparklesIcon,
+  UserIcon,
 } from '@heroicons/react/24/outline';
 import eventService from '../../services/eventService';
+import ChestTemplateModal from './ChestTemplateModal';
 import toast from 'react-hot-toast';
 
-export default function PrintableBadgesView({ eventId, groups = [], categories = [] }) {
+export default function PrintableBadgesView({ eventId, groups = [], categories = [], isStaff = false }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [activeTemplate, setActiveTemplate] = useState(null);
 
   useEffect(() => {
     if (eventId) {
       loadBadges();
+      loadActiveTemplate();
     }
   }, [eventId, selectedGroup, selectedCategory]);
+
+  const loadActiveTemplate = async () => {
+    try {
+      const templates = await eventService.getChestTemplates();
+      const eventDetails = await eventService.getEventById(eventId);
+      const chosenId = eventDetails?.selectedChestTemplate?._id || eventDetails?.selectedChestTemplate;
+      const tpl = templates?.find((t) => t._id === chosenId) || templates?.[0] || null;
+      setActiveTemplate(tpl);
+    } catch (err) {
+      console.error('Failed to load active template:', err);
+    }
+  };
 
   const loadBadges = async () => {
     try {
@@ -48,6 +66,17 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
   const schoolProfile = data?.schoolProfile;
   const event = data?.event;
 
+  // Template settings fallback
+  const theme = activeTemplate?.theme || 'classic_white';
+  const layout = activeTemplate?.layout || '6_per_page';
+  const showQr = activeTemplate?.showQr !== false;
+  const showBarcode = !!activeTemplate?.showBarcode;
+  const showPhoto = !!activeTemplate?.showPhoto;
+  const showItems = activeTemplate?.showItemsList !== false;
+  const showLogo = activeTemplate?.showSchoolLogo !== false;
+  const showHouseBanner = activeTemplate?.showHouseBanner !== false;
+  const fontSize = activeTemplate?.fontSize || 'large';
+
   return (
     <div className="space-y-6">
       {/* Controls Bar (Hidden in Print) */}
@@ -56,6 +85,11 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <IdentificationIcon className="w-5 h-5 text-purple-400" />
             Printable Participant Chest Badges & ID Cards
+            {activeTemplate && (
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold border border-purple-500/30">
+                Template: {activeTemplate.name}
+              </span>
+            )}
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
             Auto-formatted with official school emblem, large chest digits, house colors & QR verification.
@@ -91,6 +125,15 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
             ))}
           </select>
 
+          {/* Template Manager Button */}
+          <button
+            onClick={() => setIsTemplateModalOpen(true)}
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold rounded-xl border border-purple-500/30 text-xs transition flex items-center gap-1.5"
+          >
+            <SparklesIcon className="w-4 h-4 text-purple-400" />
+            Badge Template Options
+          </button>
+
           {/* Print Button */}
           <button
             onClick={handlePrint}
@@ -110,34 +153,54 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
         </div>
       ) : participants.length > 0 ? (
         /* Printable Badges Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 print:grid-cols-2 print:gap-4 print:m-0 print:p-0">
+        <div
+          className={`grid gap-6 print:gap-4 print:m-0 print:p-0 ${
+            layout === '4_per_page'
+              ? 'grid-cols-1 md:grid-cols-2 print:grid-cols-2'
+              : layout === '8_per_page'
+              ? 'grid-cols-1 md:grid-cols-3 xl:grid-cols-4 print:grid-cols-4'
+              : layout === 'single_jersey'
+              ? 'grid-cols-1 md:grid-cols-2 print:grid-cols-1'
+              : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3 print:grid-cols-3'
+          }`}
+        >
           {participants.map((p) => (
             <div
               key={p._id}
-              className="relative bg-white text-slate-900 rounded-2xl border-2 border-slate-300 shadow-md p-5 flex flex-col justify-between overflow-hidden print:border-slate-800 print:shadow-none print:break-inside-avoid print:page-break-inside-avoid min-h-[320px]"
+              className={`relative rounded-3xl border-2 shadow-md p-5 flex flex-col justify-between overflow-hidden print:shadow-none print:break-inside-avoid print:page-break-inside-avoid min-h-[320px] ${
+                theme === 'royal_gold'
+                  ? 'bg-gradient-to-br from-[#faf7ee] to-[#fef9c3] border-[#ca8a04] text-slate-900'
+                  : theme === 'modern_neon'
+                  ? 'bg-slate-900 border-purple-500 text-white print:bg-white print:text-black print:border-black'
+                  : theme === 'sport_bold'
+                  ? 'bg-white border-slate-950 text-slate-950'
+                  : 'bg-white border-slate-300 text-slate-900'
+              }`}
             >
               {/* Top House Color Strip */}
-              <div
-                className="absolute top-0 left-0 right-0 h-3"
-                style={{ backgroundColor: p.groupColor || '#3b82f6' }}
-              />
+              {showHouseBanner && (
+                <div
+                  className="absolute top-0 left-0 right-0 h-3"
+                  style={{ backgroundColor: p.groupColor || '#3b82f6' }}
+                />
+              )}
 
               {/* Card Header */}
-              <div className="flex items-center justify-between border-b border-slate-200 pb-3 mt-1">
+              <div className="flex items-center justify-between border-b border-slate-200/80 pb-3 mt-1">
                 <div className="flex items-center gap-2.5">
-                  {schoolProfile?.logoUrl ? (
+                  {showLogo && schoolProfile?.logoUrl ? (
                     <img
                       src={schoolProfile.logoUrl}
                       alt="Logo"
                       className="w-9 h-9 object-contain rounded"
                     />
-                  ) : (
-                    <div className="w-9 h-9 rounded bg-purple-100 text-purple-700 font-black text-xs flex items-center justify-center">
+                  ) : showLogo ? (
+                    <div className="w-9 h-9 rounded bg-purple-600 text-white font-black text-xs flex items-center justify-center">
                       SCH
                     </div>
-                  )}
+                  ) : null}
                   <div>
-                    <div className="text-[11px] font-black uppercase tracking-tight text-slate-800 line-clamp-1">
+                    <div className="text-[11px] font-black uppercase tracking-tight line-clamp-1">
                       {schoolProfile?.name || 'School Fest'}
                     </div>
                     <div className="text-[9px] font-bold text-purple-700 tracking-wider uppercase">
@@ -147,36 +210,58 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
                 </div>
 
                 <div
-                  className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase text-white tracking-wider"
+                  className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase text-white tracking-wider shadow-xs"
                   style={{ backgroundColor: p.groupColor || '#3b82f6' }}
                 >
                   {p.groupName}
                 </div>
               </div>
 
-              {/* Chest Hero Digits */}
-              <div className="text-center py-4 my-auto">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                  CHEST NUMBER
-                </div>
-                <div className="text-5xl font-black font-mono tracking-tight text-slate-950 mt-1">
-                  #{p.chestNumber}
-                </div>
-                <div className="inline-block mt-2 px-3 py-0.5 rounded bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700">
-                  {p.category} Section
+              {/* Chest Hero Digits & Photo */}
+              <div className="text-center py-4 my-auto flex items-center justify-center gap-4">
+                {showPhoto && (
+                  <div className="w-16 h-16 rounded-2xl bg-slate-100 border-2 border-slate-300 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    {p.student?.photo ? (
+                      <img src={p.student.photo} alt={p.student?.fullName} className="w-full h-full object-cover" />
+                    ) : (
+                      <UserIcon className="w-8 h-8 text-slate-400" />
+                    )}
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest opacity-70">
+                    CHEST NUMBER
+                  </div>
+                  <div
+                    className={`font-black font-mono tracking-tight my-0.5 ${
+                      fontSize === 'extra_large'
+                        ? 'text-6xl'
+                        : fontSize === 'large'
+                        ? 'text-5xl'
+                        : fontSize === 'medium'
+                        ? 'text-4xl'
+                        : 'text-3xl'
+                    }`}
+                  >
+                    #{p.chestNumber}
+                  </div>
+                  <div className="inline-block px-3 py-0.5 rounded bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700">
+                    {p.category} Section
+                  </div>
                 </div>
               </div>
 
               {/* Student Details & QR Code Bar */}
-              <div className="border-t border-slate-200 pt-3 flex items-center justify-between gap-3">
+              <div className="border-t border-slate-200/80 pt-3 flex items-center justify-between gap-3">
                 <div className="flex-1">
-                  <div className="text-sm font-black text-slate-900 line-clamp-1">
+                  <div className="text-sm font-black line-clamp-1">
                     {p.student?.fullName || 'Participant Student'}
                   </div>
-                  <div className="text-[11px] text-slate-600 mt-0.5">
+                  <div className="text-[11px] opacity-80 mt-0.5">
                     Adm: <strong>{p.student?.admissionNo || 'N/A'}</strong> • Class: <strong>{p.student?.currentClass?.name || 'Student'}</strong>
                   </div>
-                  {p.registeredItems && p.registeredItems.length > 0 && (
+                  {showItems && p.registeredItems && p.registeredItems.length > 0 && (
                     <div className="text-[10px] text-purple-700 font-semibold mt-1 line-clamp-1">
                       Items: {p.registeredItems.map((i) => i.name).join(', ')}
                     </div>
@@ -184,10 +269,17 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
                 </div>
 
                 {/* QR Code / Verification Stamp */}
-                <div className="w-14 h-14 bg-slate-50 border border-slate-300 rounded-lg flex flex-col items-center justify-center p-1 text-center">
-                  <QrCodeIcon className="w-7 h-7 text-slate-800" />
-                  <span className="text-[7px] font-mono font-bold text-slate-500">#{p.chestNumber}</span>
-                </div>
+                {showQr && (
+                  <div className="w-14 h-14 bg-slate-50 border border-slate-300 rounded-xl flex flex-col items-center justify-center p-1 text-center shadow-xs">
+                    <QrCodeIcon className="w-7 h-7 text-slate-800" />
+                    <span className="text-[7px] font-mono font-bold text-slate-500">#{p.chestNumber}</span>
+                  </div>
+                )}
+                {showBarcode && (
+                  <div className="font-mono text-[9px] tracking-widest text-center border-l pl-2">
+                    |||| || ||| ||||<br />#{p.chestNumber}
+                  </div>
+                )}
               </div>
 
               {/* Cut-line marker for printing */}
@@ -203,6 +295,20 @@ export default function PrintableBadgesView({ eventId, groups = [], categories =
           <h4 className="text-base font-bold text-white">No participant badges match the filter</h4>
           <p className="text-xs mt-1">Register participants or generate chest numbers in the Participants tab.</p>
         </div>
+      )}
+
+      {/* Chest Template Modal */}
+      {isTemplateModalOpen && (
+        <ChestTemplateModal
+          eventId={eventId}
+          currentTemplateId={activeTemplate?._id}
+          isOpen={isTemplateModalOpen}
+          onClose={() => setIsTemplateModalOpen(false)}
+          onTemplateChosen={(tpl) => {
+            setActiveTemplate(tpl);
+            loadBadges();
+          }}
+        />
       )}
     </div>
   );

@@ -31,17 +31,44 @@ const {
   submitAppeal,
   getAppeals,
   reviewAppeal,
+  getChestTemplates,
+  createChestTemplate,
+  updateChestTemplate,
+  deleteChestTemplate,
+  applyChestTemplate,
+  getPointTemplates,
+  createPointTemplate,
+  updatePointTemplate,
+  deletePointTemplate,
+  applyPointTemplate,
+  getDetailedPointTable,
 } = require('../controllers/festEventController');
 const { protect, authorize } = require('../middleware/auth');
 
-// Public or Authenticated Live Leaderboard / Stage Monitors (Accessible for Projectors / Displays / Students)
+// Public or Authenticated Live Leaderboard / Stage Monitors / Point Tables (Accessible for Displays & Web)
 router.get('/:id/leaderboard', getEventLeaderboard);
+router.get('/:id/detailed-point-table', getDetailedPointTable);
 router.get('/:id/results', getEventResults);
 router.get('/:id/stage-status', getStageLiveStatus);
 router.get('/:id/championships', getIndividualChampionships);
 
+// Template lists (Public / Authenticated read)
+router.get('/templates/chest', getChestTemplates);
+router.get('/templates/points', getPointTemplates);
+
 // Authenticated Routes
 router.use(protect);
+
+// Template Management (Admin / Staff)
+router.post('/templates/chest', authorize('admin', 'staff'), createChestTemplate);
+router.put('/templates/chest/:id', authorize('admin', 'staff'), updateChestTemplate);
+router.delete('/templates/chest/:id', authorize('admin'), deleteChestTemplate);
+router.put('/:id/apply-chest-template/:templateId', authorize('admin', 'staff'), applyChestTemplate);
+
+router.post('/templates/points', authorize('admin', 'staff'), createPointTemplate);
+router.put('/templates/points/:id', authorize('admin', 'staff'), updatePointTemplate);
+router.delete('/templates/points/:id', authorize('admin'), deletePointTemplate);
+router.put('/:id/apply-point-template/:templateId', authorize('admin', 'staff'), applyPointTemplate);
 
 // 1. Events CRUD
 router.get('/', getEvents);
