@@ -1,4 +1,4 @@
-const { Attendance, AttendanceTemplate } = require('../models/Attendance');
+const { Attendance, AttendanceTemplate, DailyAttendance, DailyAttendanceSession } = require('../models/Attendance');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
@@ -1070,6 +1070,825 @@ exports.notifyPendingAttendance = async (req, res) => {
     });
   } catch (error) {
     console.error('Error notifying teachers for attendance:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== DAILY ATTENDANCE SYSTEM ====================
+
+// Helper: Auto-sync Daily Attendance to Monthly Attendance summary
+async function syncDailyToMonthlyAttendance(classId, year, month) {
+  try {
+    const classObj = await Class.findById(classId);
+    if (!classObj) return;
+
+    // Find all distinct dates marked for this class in this month
+    const markedDates = await DailyAttendance.distinct('dateString', {
+      classId,
+      year: parseInt(year, 10),
+      month: parseInt(month, 10),
+      session: 'full_day'
+    });
+
+    const totalWorkingDaysRecorded = markedDates.length;
+    if (totalWorkingDaysRecorded === 0) return;
+
+    // Fetch optional template for this class/month to get configured working days if higher
+    const template = await AttendanceTemplate.findOne({
+      $or: [{ classId: classId }, { classId: null }],
+      year: parseInt(year, 10),
+      month: parseInt(month, 10),
+      isActive: true
+    });
+
+    const finalWorkingDays = template?.totalWorkingDays && template.totalWorkingDays > totalWorkingDaysRecorded
+      ? template.totalWorkingDays
+      : totalWorkingDaysRecorded;
+
+    // Aggregate daily records per student
+    const studentAggregates = await DailyAttendance.aggregate([
+      {
+        $match: {
+          classId: classObj._id,
+          year: parseInt(year, 10),
+          month: parseInt(month, 10),
+          session: 'full_day'
+        }
+      },
+      {
+        $group: {
+          _id: '$studentId',
+          studentName: { $first: '$studentName' },
+          presentCount: {
+            $sum: {
+              $cond: [
+                { $in: ['$status', ['present', 'late']] },
+                1,
+                { $cond: [{ $eq: ['$status', 'half_day'] }, 0.5, 0] }
+              ]
+            }
+          },
+          absentCount: {
+            $sum: {
+              $cond: [
+                { $eq: ['$status', 'absent'] },
+                1,
+                { $cond: [{ $eq: ['$status', 'half_day'] }, 0.5, 0] }
+              ]
+            }
+          },
+          markedDays: { $sum: 1 }
+        }
+      }
+    ]);
+
+    if (!studentAggregates || studentAggregates.length === 0) return;
+
+    const bulkOps = studentAggregates.map(agg => {
+      const presentDays = agg.presentCount;
+      const absentDays = agg.absentCount;
+      const percentage = finalWorkingDays > 0 ? (presentDays / finalWorkingDays) * 100 : 0;
+
+      return {
+        updateOne: {
+          filter: {
+            studentId: agg._id,
+            year: parseInt(year, 10),
+            month: parseInt(month, 10)
+          },
+          update: {
+            $set: {
+              studentId: agg._id,
+              studentName: agg.studentName,
+              classId: classObj._id,
+              academicYearId: classObj.academicYearId,
+              year: parseInt(year, 10),
+              month: parseInt(month, 10),
+              totalWorkingDays: finalWorkingDays,
+              presentDays: Math.round(presentDays * 10) / 10,
+              absentDays: Math.round(absentDays * 10) / 10,
+              percentage: Math.round(percentage * 10) / 10,
+              templateId: template?._id || null,
+              holidays: template?.holidays || []
+            }
+          },
+          upsert: true
+        }
+      };
+    });
+
+    if (bulkOps.length > 0) {
+      await Attendance.bulkWrite(bulkOps);
+    }
+  } catch (err) {
+    console.error('Error syncing daily to monthly attendance:', err);
+  }
+}
+
+// @desc    Mark or update Daily Attendance for a class on a specific date
+// @route   POST /api/attendance/daily
+// @access  Private (Staff / Admin)
+exports.markDailyAttendance = async (req, res) => {
+  try {
+    const { classId, dateString, session = 'full_day', records, notifyParents = false } = req.body;
+
+    if (!classId) {
+      return res.status(400).json({ success: false, message: 'Class ID is required' });
+    }
+    if (!dateString) {
+      return res.status(400).json({ success: false, message: 'Date string (YYYY-MM-DD) is required' });
+    }
+    if (!records || !Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ success: false, message: 'Attendance records list is required' });
+    }
+
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // Parse date parts
+    const [yearStr, monthStr, dayStr] = dateString.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const day = parseInt(dayStr, 10);
+    const dateObj = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+
+    let presentCount = 0;
+    let absentCount = 0;
+    let lateCount = 0;
+    let halfDayCount = 0;
+    let excusedCount = 0;
+
+    const bulkOps = records.map(rec => {
+      const status = rec.status || 'present';
+      if (status === 'present') presentCount++;
+      else if (status === 'absent') absentCount++;
+      else if (status === 'late') lateCount++;
+      else if (status === 'half_day') halfDayCount++;
+      else if (status === 'excused') excusedCount++;
+
+      return {
+        updateOne: {
+          filter: {
+            studentId: rec.studentId,
+            dateString,
+            session
+          },
+          update: {
+            $set: {
+              studentId: rec.studentId,
+              studentName: rec.studentName || 'Student',
+              classId,
+              academicYearId: classObj.academicYearId,
+              date: dateObj,
+              dateString,
+              year,
+              month,
+              day,
+              status,
+              session,
+              remarks: rec.remarks || '',
+              markedBy: req.user._id,
+              isNotified: rec.isNotified || false
+            }
+          },
+          upsert: true
+        }
+      };
+    });
+
+    await DailyAttendance.bulkWrite(bulkOps);
+
+    const totalStudents = records.length;
+    const effectivePresent = presentCount + lateCount + (halfDayCount * 0.5);
+    const attendancePercentage = totalStudents > 0 ? (effectivePresent / totalStudents) * 100 : 0;
+
+    const sessionRecord = await DailyAttendanceSession.findOneAndUpdate(
+      { classId, dateString, session },
+      {
+        $set: {
+          classId,
+          academicYearId: classObj.academicYearId,
+          date: dateObj,
+          dateString,
+          year,
+          month,
+          session,
+          totalStudents,
+          presentCount,
+          absentCount,
+          lateCount,
+          halfDayCount,
+          excusedCount,
+          attendancePercentage: Math.round(attendancePercentage * 10) / 10,
+          markedBy: req.user._id,
+          isSubmitted: true,
+          submittedAt: new Date()
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    // Sync in background to monthly summary & trigger notifications
+    setImmediate(async () => {
+      await syncDailyToMonthlyAttendance(classId, year, month);
+
+      // Handle parent notifications if requested
+      if (notifyParents) {
+        try {
+          const absentees = records.filter(r => r.status === 'absent' || r.status === 'late');
+          const studentIds = absentees.map(a => a.studentId);
+          if (studentIds.length > 0) {
+            const students = await Student.find({ _id: { $in: studentIds } });
+            const className = classObj.displayName || `${classObj.name}-${classObj.section || ''}`.trim();
+
+            for (const st of students) {
+              const rec = absentees.find(a => a.studentId.toString() === st._id.toString());
+              const isLate = rec?.status === 'late';
+              const title = isLate ? `⏰ Late Arrival Alert: ${st.fullName}` : `🚨 Absence Alert: ${st.fullName}`;
+              const message = `Dear Parent, ${st.fullName} (Roll No: ${st.rollNumber || st.admissionNo}) was marked ${isLate ? 'LATE' : 'ABSENT'} for Class ${className} on ${dateString}.${rec?.remarks ? ` Reason: ${rec.remarks}` : ''}`;
+
+              for (const pId of st.parentIds || []) {
+                const notif = await Notification.create({
+                  userId: pId,
+                  title,
+                  message,
+                  type: isLate ? 'warning' : 'error',
+                  data: {
+                    type: 'daily_attendance',
+                    studentId: st._id,
+                    studentName: st.fullName,
+                    classId: classObj._id,
+                    className,
+                    dateString,
+                    status: rec.status,
+                    remarks: rec.remarks
+                  }
+                });
+
+                broadcastToUser(pId, 'notification', {
+                  id: notif._id,
+                  _id: notif._id,
+                  title,
+                  message,
+                  type: isLate ? 'warning' : 'error',
+                  data: notif.data,
+                  timestamp: notif.createdAt,
+                  read: false
+                });
+
+                broadcastToUser(pId, 'attendance:daily:alert', {
+                  studentId: st._id,
+                  studentName: st.fullName,
+                  dateString,
+                  status: rec.status,
+                  remarks: rec.remarks
+                });
+              }
+            }
+
+            // Mark notified
+            await DailyAttendance.updateMany(
+              { studentId: { $in: studentIds }, dateString, session },
+              { $set: { isNotified: true, notifiedAt: new Date() } }
+            );
+          }
+        } catch (notifErr) {
+          console.error('Error sending daily absentee notifications:', notifErr);
+        }
+      }
+
+      // Broadcast socket update to class room & admin
+      try {
+        broadcastToClass(classId, 'attendance:daily:marked', {
+          classId,
+          dateString,
+          session,
+          summary: sessionRecord
+        });
+      } catch (sockErr) {
+        console.warn('Socket broadcast error (ignorable):', sockErr.message);
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Daily attendance for ${dateString} saved successfully (${presentCount} Present, ${absentCount} Absent, ${lateCount} Late)`,
+      session: sessionRecord
+    });
+  } catch (error) {
+    console.error('Error in markDailyAttendance:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get Daily Attendance for a class on a specific date
+// @route   GET /api/attendance/daily/class/:classId
+// @access  Private
+exports.getDailyAttendanceByClass = async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { date, session = 'full_day' } = req.query;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const targetDateStr = date || todayStr;
+
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const sortPreference = classObj?.studentSortPreference || 'alphabetic';
+
+    // Parallel fetch: students, existing daily attendance, session log, and past 7 days logs
+    const [rawStudents, dailyRecords, sessionRecord, recentRecords] = await Promise.all([
+      Student.find({ classId, status: 'active' })
+        .select('_id fullName admissionNo rollNumber gender studentCode parentIds'),
+      DailyAttendance.find({
+        classId,
+        dateString: targetDateStr,
+        session
+      }),
+      DailyAttendanceSession.findOne({
+        classId,
+        dateString: targetDateStr,
+        session
+      }).populate('markedBy', 'name shortName'),
+      DailyAttendance.find({
+        classId,
+        session
+      })
+      .sort({ dateString: -1 })
+      .limit(500)
+    ]);
+
+    const allStudents = sortStudents(rawStudents, sortPreference);
+
+    // Map daily records by studentId
+    const dailyMap = new Map();
+    dailyRecords.forEach(r => {
+      dailyMap.set(r.studentId.toString(), r);
+    });
+
+    // Map recent records for mini-streak (last 5 marked dates)
+    const recentMap = new Map();
+    recentRecords.forEach(r => {
+      const sId = r.studentId.toString();
+      if (!recentMap.has(sId)) {
+        recentMap.set(sId, []);
+      }
+      if (recentMap.get(sId).length < 5) {
+        recentMap.get(sId).push({
+          dateString: r.dateString,
+          status: r.status
+        });
+      }
+    });
+
+    let computedPresent = 0;
+    let computedAbsent = 0;
+    let computedLate = 0;
+    let computedHalfDay = 0;
+    let computedExcused = 0;
+
+    const studentsAttendance = allStudents.map(student => {
+      const record = dailyMap.get(student._id.toString());
+      const status = record ? record.status : 'present';
+
+      if (record) {
+        if (status === 'present') computedPresent++;
+        else if (status === 'absent') computedAbsent++;
+        else if (status === 'late') computedLate++;
+        else if (status === 'half_day') computedHalfDay++;
+        else if (status === 'excused') computedExcused++;
+      }
+
+      return {
+        studentId: student._id,
+        _id: record?._id || null,
+        fullName: student.fullName,
+        studentName: student.fullName,
+        rollNumber: student.rollNumber,
+        admissionNo: student.admissionNo,
+        gender: student.gender,
+        status: status,
+        remarks: record?.remarks || '',
+        isNotified: record?.isNotified || false,
+        isMarked: !!record,
+        recentHistory: recentMap.get(student._id.toString()) || []
+      };
+    });
+
+    const isSubmitted = !!sessionRecord?.isSubmitted;
+    const totalStudents = allStudents.length;
+    const presentCount = isSubmitted ? sessionRecord.presentCount : computedPresent;
+    const absentCount = isSubmitted ? sessionRecord.absentCount : computedAbsent;
+    const lateCount = isSubmitted ? sessionRecord.lateCount : computedLate;
+    const halfDayCount = isSubmitted ? sessionRecord.halfDayCount : computedHalfDay;
+    const excusedCount = isSubmitted ? sessionRecord.excusedCount : computedExcused;
+    const effectivePresent = presentCount + lateCount + (halfDayCount * 0.5);
+    const attendancePercentage = totalStudents > 0 ? (effectivePresent / totalStudents) * 100 : 0;
+
+    return res.json({
+      success: true,
+      classId,
+      className: classObj.displayName || `${classObj.name}-${classObj.section || ''}`.trim(),
+      dateString: targetDateStr,
+      session,
+      isSubmitted,
+      markedBy: sessionRecord?.markedBy?.name || null,
+      submittedAt: sessionRecord?.submittedAt || null,
+      stats: {
+        totalStudents,
+        presentCount,
+        absentCount,
+        lateCount,
+        halfDayCount,
+        excusedCount,
+        attendancePercentage: Math.round(attendancePercentage * 10) / 10
+      },
+      students: studentsAttendance
+    });
+  } catch (error) {
+    console.error('Error in getDailyAttendanceByClass:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get Daily Attendance Monthly Matrix for a class
+// @route   GET /api/attendance/daily/matrix/:classId
+// @access  Private
+exports.getDailyAttendanceMatrix = async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { year, month } = req.query;
+
+    const now = new Date();
+    const targetYear = parseInt(year || now.getFullYear(), 10);
+    const targetMonth = parseInt(month || (now.getMonth() + 1), 10);
+
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const sortPreference = classObj?.studentSortPreference || 'alphabetic';
+
+    // Days in this month
+    const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+
+    // Parallel query for students, daily records, template, and sessions
+    const [rawStudents, dailyRecords, template, sessionRecords] = await Promise.all([
+      Student.find({ classId, status: 'active' })
+        .select('_id fullName admissionNo rollNumber gender studentCode'),
+      DailyAttendance.find({
+        classId,
+        year: targetYear,
+        month: targetMonth,
+        session: 'full_day'
+      }),
+      AttendanceTemplate.findOne({
+        $or: [{ classId: classId }, { classId: null }],
+        year: targetYear,
+        month: targetMonth,
+        isActive: true
+      }),
+      DailyAttendanceSession.find({
+        classId,
+        year: targetYear,
+        month: targetMonth,
+        session: 'full_day'
+      })
+    ]);
+
+    const allStudents = sortStudents(rawStudents, sortPreference);
+
+    // Days marked
+    const markedDatesSet = new Set(sessionRecords.map(s => s.dateString));
+
+    // Holiday map
+    const holidayMap = new Map();
+    (template?.holidays || []).forEach(h => {
+      const hDate = new Date(h.date);
+      if (hDate.getMonth() + 1 === targetMonth && hDate.getFullYear() === targetYear) {
+        holidayMap.set(hDate.getDate(), h.name);
+      }
+    });
+
+    // Build map: studentId -> { day: { status, remarks } }
+    const studentDayMap = new Map();
+    dailyRecords.forEach(r => {
+      const sId = r.studentId.toString();
+      if (!studentDayMap.has(sId)) {
+        studentDayMap.set(sId, {});
+      }
+      studentDayMap.get(sId)[r.day] = {
+        status: r.status,
+        remarks: r.remarks
+      };
+    });
+
+    // Calculate students matrix rows
+    const matrixRows = allStudents.map(student => {
+      const dayData = studentDayMap.get(student._id.toString()) || {};
+      let presentCount = 0;
+      let absentCount = 0;
+      let lateCount = 0;
+      let halfDayCount = 0;
+      let excusedCount = 0;
+
+      const days = {};
+      for (let d = 1; d <= daysInMonth; d++) {
+        const record = dayData[d];
+        if (record) {
+          days[d] = record.status;
+          if (record.status === 'present') presentCount++;
+          else if (record.status === 'absent') absentCount++;
+          else if (record.status === 'late') { lateCount++; presentCount++; }
+          else if (record.status === 'half_day') { halfDayCount++; presentCount += 0.5; absentCount += 0.5; }
+          else if (record.status === 'excused') excusedCount++;
+        } else {
+          // Check if Sunday / Holiday
+          const dayOfWeek = new Date(targetYear, targetMonth - 1, d).getDay();
+          if (dayOfWeek === 0) {
+            days[d] = 'SUN';
+          } else if (holidayMap.has(d)) {
+            days[d] = 'HOL';
+          } else {
+            days[d] = '-';
+          }
+        }
+      }
+
+      const totalMarkedDays = presentCount + absentCount + excusedCount;
+      const percentage = totalMarkedDays > 0 ? (presentCount / totalMarkedDays) * 100 : 0;
+
+      return {
+        studentId: student._id,
+        fullName: student.fullName,
+        admissionNo: student.admissionNo,
+        rollNumber: student.rollNumber,
+        days,
+        presentCount: Math.round(presentCount * 10) / 10,
+        absentCount: Math.round(absentCount * 10) / 10,
+        lateCount,
+        halfDayCount,
+        excusedCount,
+        percentage: Math.round(percentage * 10) / 10
+      };
+    });
+
+    return res.json({
+      success: true,
+      classId,
+      className: classObj.displayName || `${classObj.name}-${classObj.section || ''}`.trim(),
+      year: targetYear,
+      month: targetMonth,
+      daysInMonth,
+      totalWorkingDays: markedDatesSet.size || template?.totalWorkingDays || 25,
+      markedDaysCount: markedDatesSet.size,
+      holidays: template?.holidays || [],
+      students: matrixRows
+    });
+  } catch (error) {
+    console.error('Error in getDailyAttendanceMatrix:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get Daily Attendance for a student across dates/months
+// @route   GET /api/attendance/daily/student/:studentId
+// @access  Private
+exports.getDailyAttendanceByStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { year, month } = req.query;
+
+    const student = await Student.findById(studentId).populate('classId', 'name section displayName');
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const query = { studentId };
+    if (year) query.year = parseInt(year, 10);
+    if (month) query.month = parseInt(month, 10);
+
+    const dailyRecords = await DailyAttendance.find(query)
+      .sort({ dateString: -1 })
+      .limit(365);
+
+    let presentDays = 0;
+    let absentDays = 0;
+    let lateDays = 0;
+    let halfDays = 0;
+    let excusedDays = 0;
+
+    dailyRecords.forEach(r => {
+      if (r.status === 'present') presentDays++;
+      else if (r.status === 'absent') absentDays++;
+      else if (r.status === 'late') { lateDays++; presentDays++; }
+      else if (r.status === 'half_day') { halfDays++; presentDays += 0.5; absentDays += 0.5; }
+      else if (r.status === 'excused') excusedDays++;
+    });
+
+    const totalDays = dailyRecords.length;
+    const percentage = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
+
+    return res.json({
+      success: true,
+      student: {
+        _id: student._id,
+        fullName: student.fullName,
+        admissionNo: student.admissionNo,
+        rollNumber: student.rollNumber,
+        className: student.classId?.displayName || student.classId?.name
+      },
+      stats: {
+        totalRecordedDays: totalDays,
+        presentDays: Math.round(presentDays * 10) / 10,
+        absentDays: Math.round(absentDays * 10) / 10,
+        lateDays,
+        halfDays,
+        excusedDays,
+        percentage: Math.round(percentage * 10) / 10
+      },
+      records: dailyRecords
+    });
+  } catch (error) {
+    console.error('Error in getDailyAttendanceByStudent:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get Campus-Wide Daily Attendance Dashboard Stats
+// @route   GET /api/attendance/daily/dashboard-stats
+// @access  Private
+exports.getDailyAttendanceDashboardStats = async (req, res) => {
+  try {
+    const { date } = req.query;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const targetDateStr = date || todayStr;
+
+    // Parallel fetch: all active classes, all sessions for today, and total student count
+    const [classes, sessions, totalStudents] = await Promise.all([
+      Class.find({ status: 'active' }).populate('classTeacherId', 'name shortName email'),
+      DailyAttendanceSession.find({ dateString: targetDateStr }).populate('markedBy', 'name shortName'),
+      Student.countDocuments({ status: 'active' })
+    ]);
+
+    const sessionMap = new Map();
+    sessions.forEach(s => {
+      sessionMap.set(s.classId.toString(), s);
+    });
+
+    let totalPresent = 0;
+    let totalAbsent = 0;
+    let totalLate = 0;
+    let totalHalfDay = 0;
+    let submittedClassesCount = 0;
+
+    const classBreakdown = classes.map(cls => {
+      const session = sessionMap.get(cls._id.toString());
+      const isMarked = !!session?.isSubmitted;
+      if (isMarked) {
+        submittedClassesCount++;
+        totalPresent += session.presentCount || 0;
+        totalAbsent += session.absentCount || 0;
+        totalLate += session.lateCount || 0;
+        totalHalfDay += session.halfDayCount || 0;
+      }
+
+      return {
+        classId: cls._id,
+        className: cls.displayName || `${cls.name}-${cls.section || ''}`.trim(),
+        classTeacher: cls.classTeacherId?.name || 'Unassigned',
+        isMarked,
+        presentCount: session?.presentCount || 0,
+        absentCount: session?.absentCount || 0,
+        lateCount: session?.lateCount || 0,
+        totalStudents: session?.totalStudents || 0,
+        attendancePercentage: session?.attendancePercentage || 0,
+        submittedAt: session?.submittedAt || null,
+        markedBy: session?.markedBy?.name || null
+      };
+    });
+
+    const totalMarkedStudents = totalPresent + totalAbsent + totalLate + totalHalfDay;
+    const effectivePresent = totalPresent + totalLate + (totalHalfDay * 0.5);
+    const overallPercentage = totalMarkedStudents > 0 ? (effectivePresent / totalMarkedStudents) * 100 : 0;
+
+    return res.json({
+      success: true,
+      dateString: targetDateStr,
+      overall: {
+        totalCampusStudents: totalStudents,
+        totalMarkedStudents,
+        totalPresent,
+        totalAbsent,
+        totalLate,
+        overallPercentage: Math.round(overallPercentage * 10) / 10,
+        submittedClassesCount,
+        totalClassesCount: classes.length,
+        submissionRate: classes.length > 0 ? Math.round((submittedClassesCount / classes.length) * 100) : 0
+      },
+      classes: classBreakdown
+    });
+  } catch (error) {
+    console.error('Error in getDailyAttendanceDashboardStats:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Notify parents of absent students for a specific class and date
+// @route   POST /api/attendance/daily/notify-absent
+// @access  Private (Staff / Admin)
+exports.notifyDailyAbsentees = async (req, res) => {
+  try {
+    const { classId, dateString, studentIds } = req.body;
+
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const query = {
+      classId,
+      dateString,
+      status: { $in: ['absent', 'late'] }
+    };
+    if (studentIds && Array.isArray(studentIds) && studentIds.length > 0) {
+      query.studentId = { $in: studentIds };
+    }
+
+    const absenteeRecords = await DailyAttendance.find(query);
+    if (!absenteeRecords || absenteeRecords.length === 0) {
+      return res.json({ success: true, message: 'No absent students found for notification', count: 0 });
+    }
+
+    const stIds = absenteeRecords.map(r => r.studentId);
+    const students = await Student.find({ _id: { $in: stIds } });
+    const className = classObj.displayName || `${classObj.name}-${classObj.section || ''}`.trim();
+
+    let notifiedCount = 0;
+    for (const st of students) {
+      const rec = absenteeRecords.find(r => r.studentId.toString() === st._id.toString());
+      const isLate = rec?.status === 'late';
+      const title = isLate ? `⏰ Late Arrival Alert: ${st.fullName}` : `🚨 Absence Alert: ${st.fullName}`;
+      const message = `Dear Parent, ${st.fullName} (Roll No: ${st.rollNumber || st.admissionNo}) was marked ${isLate ? 'LATE' : 'ABSENT'} for Class ${className} on ${dateString}.${rec?.remarks ? ` Reason: ${rec.remarks}` : ''}`;
+
+      for (const pId of st.parentIds || []) {
+        const notif = await Notification.create({
+          userId: pId,
+          title,
+          message,
+          type: isLate ? 'warning' : 'error',
+          data: {
+            type: 'daily_attendance',
+            studentId: st._id,
+            studentName: st.fullName,
+            classId: classObj._id,
+            className,
+            dateString,
+            status: rec.status,
+            remarks: rec.remarks
+          }
+        });
+
+        broadcastToUser(pId, 'notification', {
+          id: notif._id,
+          _id: notif._id,
+          title,
+          message,
+          type: isLate ? 'warning' : 'error',
+          data: notif.data,
+          timestamp: notif.createdAt,
+          read: false
+        });
+
+        broadcastToUser(pId, 'attendance:daily:alert', {
+          studentId: st._id,
+          studentName: st.fullName,
+          dateString,
+          status: rec.status,
+          remarks: rec.remarks
+        });
+        notifiedCount++;
+      }
+    }
+
+    await DailyAttendance.updateMany(
+      { _id: { $in: absenteeRecords.map(r => r._id) } },
+      { $set: { isNotified: true, notifiedAt: new Date() } }
+    );
+
+    return res.json({
+      success: true,
+      message: `Sent absence notifications to ${notifiedCount} parent(s) for ${absenteeRecords.length} student(s)`,
+      count: notifiedCount
+    });
+  } catch (error) {
+    console.error('Error in notifyDailyAbsentees:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

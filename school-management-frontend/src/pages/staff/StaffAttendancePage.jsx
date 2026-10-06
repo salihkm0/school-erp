@@ -18,6 +18,8 @@ import { fetchAcademicYears } from '../../store/slices/academicYearSlice'
 import { fetchTeacherClassTeacherClasses, clearTeacherClasses } from '../../store/slices/classSlice'
 import { fetchAttendanceSummary, bulkCreateAttendance, fetchAttendanceByClass } from '../../store/slices/attendanceSlice'
 import LoadingSpinner from '../../components/common/LoadingSpinner.jsx'
+import DailyAttendanceRollCall from '../../components/attendance/DailyAttendanceRollCall.jsx'
+import DailyAttendanceMatrix from '../../components/attendance/DailyAttendanceMatrix.jsx'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
 
@@ -29,8 +31,9 @@ const StaffAttendancePage = () => {
   const { staff, isLoading: staffLoading } = useSelector((state) => state.staff)
   const { teacherClassTeacherClasses, isLoading: classesLoading } = useSelector((state) => state.classes)
   const { academicYears } = useSelector((state) => state.academicYears)
-  const { isLoading: attendanceLoading } = useSelector((state) => state.attendance) // Fix: Add this line
+  const { isLoading: attendanceLoading } = useSelector((state) => state.attendance)
   
+  const [activeTab, setActiveTab] = useState('daily') // 'daily' | 'matrix' | 'monthly'
   const [myClasses, setMyClasses] = useState([])
   const [selectedClass, setSelectedClass] = useState(null)
   const [summary, setSummary] = useState(null)
@@ -435,8 +438,59 @@ const StaffAttendancePage = () => {
           </div>
         )}
 
-        {/* Filters Card */}
+        {/* View Mode Switcher */}
         {selectedClass && (
+          <div className="flex items-center gap-2 mb-6 border-b border-gray-200 pb-3">
+            <button
+              type="button"
+              onClick={() => setActiveTab('daily')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'daily'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              📋 Daily Roll Call (Today)
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('matrix')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'matrix'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              📊 Monthly Matrix Register
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('monthly')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'monthly'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              ✏️ Monthly Manual Override
+            </button>
+          </div>
+        )}
+
+        {/* Tab 1: Daily Roll Call */}
+        {selectedClass && activeTab === 'daily' && (
+          <DailyAttendanceRollCall defaultClassId={selectedClass._id} isStaffView={true} />
+        )}
+
+        {/* Tab 2: Monthly Matrix */}
+        {selectedClass && activeTab === 'matrix' && (
+          <DailyAttendanceMatrix defaultClassId={selectedClass._id} />
+        )}
+
+        {/* Tab 3: Monthly Manual Override */}
+        {selectedClass && activeTab === 'monthly' && (
+          <>
+          {/* Filters Card */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-6 overflow-hidden">
             <div className="p-4 border-b border-gray-50">
               <div className="flex items-center gap-2">
@@ -534,7 +588,6 @@ const StaffAttendancePage = () => {
               )}
             </div>
           </div>
-        )}
 
         {/* Stats Cards */}
         {summary && !loadingSummary && selectedClass && (
@@ -687,6 +740,8 @@ const StaffAttendancePage = () => {
               No students are enrolled in this class.
             </p>
           </div>
+        )}
+        </>
         )}
       </div>
     </div>

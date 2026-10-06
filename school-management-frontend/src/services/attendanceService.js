@@ -246,6 +246,86 @@ const attendanceService = {
       console.error('Error notifying pending attendance:', error)
       throw error
     }
+  },
+
+  // ==================== DAILY ATTENDANCE METHODS ====================
+
+  markDailyAttendance: async ({ classId, dateString, session = 'full_day', records, notifyParents = false }) => {
+    try {
+      const response = await api.post('/attendance/daily', {
+        classId,
+        dateString,
+        session,
+        records,
+        notifyParents
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error marking daily attendance:', error)
+      throw error
+    }
+  },
+
+  getDailyAttendanceByClass: async (classId, date, session = 'full_day') => {
+    try {
+      const response = await api.get(`/attendance/daily/class/${classId}`, {
+        params: { date, session }
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error fetching daily attendance for class:', error)
+      throw error
+    }
+  },
+
+  getDailyAttendanceMatrix: async (classId, year, month) => {
+    try {
+      const response = await api.get(`/attendance/daily/matrix/${classId}`, {
+        params: { year, month }
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error fetching daily attendance matrix:', error)
+      throw error
+    }
+  },
+
+  getDailyAttendanceByStudent: async (studentId, year, month) => {
+    try {
+      const response = await api.get(`/attendance/daily/student/${studentId}`, {
+        params: { year, month }
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error fetching daily student attendance:', error)
+      throw error
+    }
+  },
+
+  getDailyAttendanceDashboardStats: async (date) => {
+    try {
+      const response = await api.get('/attendance/daily/dashboard-stats', {
+        params: { date }
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error fetching daily attendance dashboard stats:', error)
+      throw error
+    }
+  },
+
+  notifyDailyAbsentees: async ({ classId, dateString, studentIds }) => {
+    try {
+      const response = await api.post('/attendance/daily/notify-absent', {
+        classId,
+        dateString,
+        studentIds
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error notifying daily absentees:', error)
+      throw error
+    }
   }
 }
 

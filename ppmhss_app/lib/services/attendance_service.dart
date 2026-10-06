@@ -103,4 +103,86 @@ class AttendanceService {
     final response = await _api.post('${ApiConfig.attendance}/templates/apply', data: data);
     return response.data;
   }
+
+  // ==================== DAILY ATTENDANCE METHODS ====================
+
+  Future<Map<String, dynamic>> getDailyAttendanceByClass({
+    required String classId,
+    String? date,
+    String session = 'full_day',
+  }) async {
+    final params = <String, dynamic>{'session': session};
+    if (date != null) params['date'] = date;
+
+    final response = await _api.get(
+      '${ApiConfig.attendance}/daily/class/$classId',
+      params: params,
+      noCache: true,
+    );
+    return response.data;
+  }
+
+  Future<Map<String, dynamic>> markDailyAttendance({
+    required String classId,
+    required String dateString,
+    required List<Map<String, dynamic>> records,
+    bool notifyParents = true,
+    String session = 'full_day',
+  }) async {
+    _api.invalidateCache('/attendance');
+
+    final response = await _api.post(
+      '${ApiConfig.attendance}/daily',
+      data: {
+        'classId': classId,
+        'dateString': dateString,
+        'session': session,
+        'records': records,
+        'notifyParents': notifyParents,
+      },
+    );
+    return response.data;
+  }
+
+  Future<Map<String, dynamic>> getDailyAttendanceMatrix({
+    required String classId,
+    required int year,
+    required int month,
+  }) async {
+    final response = await _api.get(
+      '${ApiConfig.attendance}/daily/matrix/$classId',
+      params: {'year': year, 'month': month},
+      noCache: true,
+    );
+    return response.data;
+  }
+
+  Future<Map<String, dynamic>> getDailyStudentAttendance(
+    String studentId, {
+    int? year,
+    int? month,
+  }) async {
+    final params = <String, dynamic>{};
+    if (year != null) params['year'] = year;
+    if (month != null) params['month'] = month;
+
+    final response = await _api.get(
+      '${ApiConfig.attendance}/daily/student/$studentId',
+      params: params.isEmpty ? null : params,
+      noCache: true,
+    );
+    return response.data;
+  }
+
+  Future<Map<String, dynamic>> getDailyAttendanceDashboardStats({String? date}) async {
+    final params = <String, dynamic>{};
+    if (date != null) params['date'] = date;
+
+    final response = await _api.get(
+      '${ApiConfig.attendance}/daily/dashboard-stats',
+      params: params.isEmpty ? null : params,
+      noCache: true,
+    );
+    return response.data;
+  }
 }

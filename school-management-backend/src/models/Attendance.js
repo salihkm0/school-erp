@@ -129,22 +129,180 @@ AttendanceSchema.pre('save', function(next) {
   next();
 });
 
+// ── Daily Attendance Schema ──────────────────────────────────────────────
+const DailyAttendanceSchema = new mongoose.Schema({
+  studentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student',
+    required: true
+  },
+  studentName: {
+    type: String,
+    required: true
+  },
+  classId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
+    required: true
+  },
+  academicYearId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AcademicYear',
+    required: true
+  },
+  date: {
+    type: Date,
+    required: true
+  },
+  dateString: {
+    type: String, // "YYYY-MM-DD"
+    required: true
+  },
+  year: {
+    type: Number,
+    required: true
+  },
+  month: {
+    type: Number,
+    required: true
+  },
+  day: {
+    type: Number,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['present', 'absent', 'late', 'half_day', 'excused'],
+    default: 'present',
+    required: true
+  },
+  session: {
+    type: String,
+    enum: ['full_day', 'morning', 'afternoon'],
+    default: 'full_day'
+  },
+  remarks: {
+    type: String,
+    default: ''
+  },
+  markedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isNotified: {
+    type: Boolean,
+    default: false
+  },
+  notifiedAt: Date
+}, {
+  timestamps: true
+});
+
+// ── Daily Attendance Session / Class Log Schema ──────────────────────────
+const DailyAttendanceSessionSchema = new mongoose.Schema({
+  classId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
+    required: true
+  },
+  academicYearId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AcademicYear',
+    required: true
+  },
+  date: {
+    type: Date,
+    required: true
+  },
+  dateString: {
+    type: String, // "YYYY-MM-DD"
+    required: true
+  },
+  year: {
+    type: Number,
+    required: true
+  },
+  month: {
+    type: Number,
+    required: true
+  },
+  session: {
+    type: String,
+    enum: ['full_day', 'morning', 'afternoon'],
+    default: 'full_day'
+  },
+  totalStudents: {
+    type: Number,
+    default: 0
+  },
+  presentCount: {
+    type: Number,
+    default: 0
+  },
+  absentCount: {
+    type: Number,
+    default: 0
+  },
+  lateCount: {
+    type: Number,
+    default: 0
+  },
+  halfDayCount: {
+    type: Number,
+    default: 0
+  },
+  excusedCount: {
+    type: Number,
+    default: 0
+  },
+  attendancePercentage: {
+    type: Number,
+    default: 0
+  },
+  markedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isSubmitted: {
+    type: Boolean,
+    default: true
+  },
+  submittedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
+
 // ── Indexes ──────────────────────────────────────────────────────────
-// AttendanceTemplate: the most frequent query pattern
 AttendanceTemplateSchema.index({ classId: 1, year: 1, month: 1, isActive: 1 });
 AttendanceTemplateSchema.index({ academicYearId: 1 });
 
-// Attendance: already has unique index on studentId+year+month
 AttendanceSchema.index({ studentId: 1, year: 1, month: 1 }, { unique: true });
 AttendanceSchema.index({ classId: 1, year: 1, month: 1 });
 AttendanceSchema.index({ academicYearId: 1 });
 
+DailyAttendanceSchema.index({ studentId: 1, dateString: 1, session: 1 }, { unique: true });
+DailyAttendanceSchema.index({ classId: 1, dateString: 1, session: 1 });
+DailyAttendanceSchema.index({ classId: 1, year: 1, month: 1 });
+DailyAttendanceSchema.index({ studentId: 1, year: 1, month: 1 });
+DailyAttendanceSchema.index({ academicYearId: 1 });
+
+DailyAttendanceSessionSchema.index({ classId: 1, dateString: 1, session: 1 }, { unique: true });
+DailyAttendanceSessionSchema.index({ dateString: 1 });
+DailyAttendanceSessionSchema.index({ classId: 1, year: 1, month: 1 });
+
 // Create models
 const AttendanceModel = mongoose.models.Attendance || mongoose.model('Attendance', AttendanceSchema);
 const AttendanceTemplateModel = mongoose.models.AttendanceTemplate || mongoose.model('AttendanceTemplate', AttendanceTemplateSchema);
+const DailyAttendanceModel = mongoose.models.DailyAttendance || mongoose.model('DailyAttendance', DailyAttendanceSchema);
+const DailyAttendanceSessionModel = mongoose.models.DailyAttendanceSession || mongoose.model('DailyAttendanceSession', DailyAttendanceSessionSchema);
 
 // Export as an object with named exports
 module.exports = {
   Attendance: AttendanceModel,
-  AttendanceTemplate: AttendanceTemplateModel
+  AttendanceTemplate: AttendanceTemplateModel,
+  DailyAttendance: DailyAttendanceModel,
+  DailyAttendanceSession: DailyAttendanceSessionModel
 };

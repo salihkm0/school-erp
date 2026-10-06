@@ -18,10 +18,25 @@ const {
   deleteAttendanceTemplate,
   applyTemplateToMonth,
   getTemplateByClassAndMonth,
-  notifyPendingAttendance
+  notifyPendingAttendance,
+  // Daily Attendance Controllers
+  markDailyAttendance,
+  getDailyAttendanceByClass,
+  getDailyAttendanceMatrix,
+  getDailyAttendanceByStudent,
+  getDailyAttendanceDashboardStats,
+  notifyDailyAbsentees
 } = require('../controllers/attendanceController');
 
 router.use(protect);
+
+// ── Daily Attendance Routes ──────────────────────────────────────────
+router.post('/daily', authorize('staff', 'admin', 'principal'), markDailyAttendance);
+router.post('/daily/notify-absent', authorize('staff', 'admin', 'principal'), notifyDailyAbsentees);
+router.get('/daily/dashboard-stats', authorize('staff', 'admin', 'principal'), getDailyAttendanceDashboardStats);
+router.get('/daily/class/:classId', validate([classIdParam]), getDailyAttendanceByClass);
+router.get('/daily/matrix/:classId', validate([classIdParam]), getDailyAttendanceMatrix);
+router.get('/daily/student/:studentId', validate([studentIdParam]), getDailyAttendanceByStudent);
 
 // Template routes
 router.post('/templates', authorize('admin'), createAttendanceTemplate);
@@ -35,7 +50,7 @@ router.get('/templates/class/:classId/:year/:month', authorize('admin', 'staff')
 // Reminders & Notifications
 router.post('/notify-pending', authorize('admin', 'principal'), notifyPendingAttendance);
 
-// Attendance routes
+// Monthly Attendance routes (legacy/aggregate)
 router.get('/', getAttendance);
 router.get('/summary', getAttendanceSummary);
 router.get('/student/:studentId', validate([studentIdParam]), getAttendanceByStudent);

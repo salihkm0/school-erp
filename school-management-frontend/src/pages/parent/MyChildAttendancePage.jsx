@@ -12,7 +12,9 @@ import {
   ChartBarIcon
 } from '@heroicons/react/24/outline'
 import { fetchMyChildren } from '../../store/slices/parentSlice'
+import attendanceService from '../../services/attendanceService'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
+import { CheckCircle2, XCircle, Clock, AlertCircle, Calendar } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 const MyChildAttendancePage = () => {
@@ -22,10 +24,12 @@ const MyChildAttendancePage = () => {
   
   const [selectedChild, setSelectedChild] = useState(null)
   const [attendanceData, setAttendanceData] = useState([])
+  const [dailyLogs, setDailyLogs] = useState([])
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear())
   const [summary, setSummary] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
   const [loadingChildId, setLoadingChildId] = useState(null)
+  const [viewTab, setViewTab] = useState('daily') // 'daily' | 'monthly'
 
   useEffect(() => {
     loadChildren()
@@ -52,6 +56,7 @@ const MyChildAttendancePage = () => {
     setLoadingChildId(childId)
     setSelectedChild(child)
     setAttendanceData([])
+    setDailyLogs([])
     setSummary(null)
     await loadAttendance(childId)
     setLoadingChildId(null)
@@ -60,21 +65,32 @@ const MyChildAttendancePage = () => {
   const loadAttendance = async (childId) => {
     setIsLoading(true)
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:5055/api/attendance/student/${childId}`, {
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
-      })
-      const data = await response.json()
-      const attendanceRecords = Array.isArray(data) ? data : (data.data || [])
+      // Fetch monthly & daily in parallel
+      const [monthlyRes, dailyRes] = await Promise.all([
+        attendanceService.getAttendanceByStudent(childId).catch(() => []),
+        attendanceService.getDailyAttendanceByStudent(childId).catch(() => ({ records: [], stats: null }))
+      ])
+
+      const attendanceRecords = Array.isArray(monthlyRes) ? monthlyRes : (monthlyRes.data || [])
       setAttendanceData(attendanceRecords)
+      setDailyLogs(dailyRes?.records || [])
       
-      const totalDays = attendanceRecords.reduce((sum, r) => sum + (r.totalWorkingDays || 0), 0)
-      const totalPresent = attendanceRecords.reduce((sum, r) => sum + (r.presentDays || 0), 0)
-      const overallPercentage = totalDays > 0 ? (totalPresent / totalDays) * 100 : 0
+      const totalDays = dailyRes?.stats?.totalRecordedDays || attendanceRecords.reduce((sum, r) => sum + (r.totalWorkingDays || 0), 0)
+      const totalPresent = dailyRes?.stats?.presentDays || attendanceRecords.reduce((sum, r) => sum + (r.presentDays || 0), 0)
+      const overallPercentage = dailyRes?.stats?.percentage || (totalDays > 0 ? (totalPresent / totalDays) * 100 : 0)
       
-      setSummary({ totalDays, totalPresent, totalAbsent: totalDays - totalPresent, overallPercentage })
-    } catch (error) { console.error('Failed to load attendance:', error) }
-    finally { setIsLoading(false) }
+      setSummary({ 
+        totalDays, 
+        totalPresent, 
+        totalAbsent: dailyRes?.stats?.absentDays || (totalDays - totalPresent), 
+        totalLate: dailyRes?.stats?.lateDays || 0,
+        overallPercentage 
+      })
+    } catch (error) { 
+      console.error('Failed to load attendance:', error) 
+    } finally { 
+      setIsLoading(false) 
+    }
   }
 
   const getStatusBadge = (percentage) => {
@@ -205,61 +221,158 @@ const MyChildAttendancePage = () => {
                 </div>
               )}
 
-              {/* Year Filter */}
-              {availableYears.length > 0 && (
-                <div className="bg-white rounded-lg border border-gray-200 p-3 flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-700">Year:</label>
-                    <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="px-2 py-1 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500">
-                      {availableYears.map(year => (<option key={year} value={year}>{year}</option>))}
-                    </select>
-                  </div>
-                  <button onClick={() => loadAttendance(selectedChild?._id || selectedChild?.studentId)} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg hover:bg-emerald-50">
-                    <ArrowPathIcon className="w-4 h-4" />
-                  </button>
+              {/* View Switcher: Daily Timeline vs Monthly Register */}
+              <div className="flex items-center gap-2 mb-4 border-b border-gray-200 pb-3">
+                <button
+                  type="button"
+                  onClick={() => setViewTab('daily')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewTab === 'daily'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  📅 Daily Attendance Log
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewTab('monthly')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewTab === 'monthly'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  📊 Monthly Summary
+                </button>
+              </div>
+
+              {/* Tab 1: Daily Log Timeline */}
+              {viewTab === 'daily' && (
+                <div>
+                  {dailyLogs.length === 0 ? (
+                    <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+                      <Calendar className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                      <h3 className="text-sm font-semibold text-gray-800 mb-1">No Daily Attendance Logs Yet</h3>
+                      <p className="text-xs text-gray-500">Daily roll call logs will appear here once marked by the class teacher.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+                      {dailyLogs.map((log, idx) => {
+                        const isPresent = log.status === 'present'
+                        const isAbsent = log.status === 'absent'
+                        const isLate = log.status === 'late'
+                        const isHalfDay = log.status === 'half_day'
+
+                        return (
+                          <div key={idx} className="p-3.5 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                isPresent ? 'bg-emerald-100 text-emerald-700' : isAbsent ? 'bg-rose-100 text-rose-700' : isLate ? 'bg-amber-100 text-amber-700' : 'bg-sky-100 text-sky-700'
+                              }`}>
+                                {isPresent && <CheckCircle2 className="w-4 h-4" />}
+                                {isAbsent && <XCircle className="w-4 h-4" />}
+                                {isLate && <Clock className="w-4 h-4" />}
+                                {isHalfDay && <AlertCircle className="w-4 h-4" />}
+                              </div>
+                              <div>
+                                <div className="text-xs font-bold text-gray-900">
+                                  {new Date(log.date || log.dateString).toLocaleDateString('en-US', {
+                                    weekday: 'short',
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                  })}
+                                </div>
+                                {log.remarks && (
+                                  <p className="text-[11px] text-gray-500 mt-0.5">
+                                    Remark: {log.remarks}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div>
+                              <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                                isPresent 
+                                  ? 'bg-emerald-100 text-emerald-800' 
+                                  : isAbsent 
+                                    ? 'bg-rose-100 text-rose-800' 
+                                    : isLate 
+                                      ? 'bg-amber-100 text-amber-800' 
+                                      : 'bg-sky-100 text-sky-800'
+                              }`}>
+                                {log.status?.replace('_', ' ')}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Attendance Table */}
-              {sortedAttendance.length === 0 ? (
-                <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-                  <CalendarIcon className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                  <h3 className="text-base font-semibold text-gray-800 mb-1">No Records</h3>
-                  <p className="text-sm text-gray-500">No attendance records for {selectedYear}</p>
-                </div>
-              ) : (
-                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full">
-                      <thead className="bg-gray-50">
-                        <tr className="border-b border-gray-200">
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Month</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Days</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Present</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Absent</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">%</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {sortedAttendance.map((record, idx) => {
-                          const percentage = record.percentage || 0
-                          const status = getStatusBadge(percentage)
-                          return (
-                            <tr key={idx} className="hover:bg-gray-50">
-                              <td className="px-3 py-2 text-sm font-medium text-gray-900">{formatMonth(record.year, record.month)} {record.year}</td>
-                              <td className="px-3 py-2 text-center text-sm text-gray-600">{record.totalWorkingDays}</td>
-                              <td className="px-3 py-2 text-center text-sm text-emerald-600 font-medium">{record.presentDays}</td>
-                              <td className="px-3 py-2 text-center text-sm text-rose-600">{record.absentDays}</td>
-                              <td className="px-3 py-2 text-center"><span className={`text-sm font-medium ${percentage >= 75 ? 'text-emerald-600' : percentage >= 60 ? 'text-amber-600' : 'text-rose-600'}`}>{percentage.toFixed(1)}%</span></td>
-                              <td className="px-3 py-2 text-center"><span className={`inline-block px-2 py-0.5 text-xs rounded-md ${status.color}`}>{status.label}</span></td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+              {/* Tab 2: Monthly Summary Table */}
+              {viewTab === 'monthly' && (
+                <>
+                {/* Year Filter */}
+                {availableYears.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-3 flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-gray-700">Year:</label>
+                      <select value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))} className="px-2 py-1 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                        {availableYears.map(year => (<option key={year} value={year}>{year}</option>))}
+                      </select>
+                    </div>
+                    <button onClick={() => loadAttendance(selectedChild?._id || selectedChild?.studentId)} className="p-1.5 text-gray-400 hover:text-emerald-600 rounded-lg hover:bg-emerald-50">
+                      <ArrowPathIcon className="w-4 h-4" />
+                    </button>
                   </div>
-                </div>
+                )}
+
+                {/* Attendance Table */}
+                {sortedAttendance.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+                    <CalendarIcon className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <h3 className="text-base font-semibold text-gray-800 mb-1">No Records</h3>
+                    <p className="text-sm text-gray-500">No attendance records for {selectedYear}</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full">
+                        <thead className="bg-gray-50">
+                          <tr className="border-b border-gray-200">
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Month</th>
+                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Days</th>
+                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Present</th>
+                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Absent</th>
+                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">%</th>
+                            <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {sortedAttendance.map((record, idx) => {
+                            const percentage = record.percentage || 0
+                            const status = getStatusBadge(percentage)
+                            return (
+                              <tr key={idx} className="hover:bg-gray-50">
+                                <td className="px-3 py-2 text-sm font-medium text-gray-900">{formatMonth(record.year, record.month)} {record.year}</td>
+                                <td className="px-3 py-2 text-center text-sm text-gray-600">{record.totalWorkingDays}</td>
+                                <td className="px-3 py-2 text-center text-sm text-emerald-600 font-medium">{record.presentDays}</td>
+                                <td className="px-3 py-2 text-center text-sm text-rose-600">{record.absentDays}</td>
+                                <td className="px-3 py-2 text-center"><span className={`text-sm font-medium ${percentage >= 75 ? 'text-emerald-600' : percentage >= 60 ? 'text-amber-600' : 'text-rose-600'}`}>{percentage.toFixed(1)}%</span></td>
+                                <td className="px-3 py-2 text-center"><span className={`inline-block px-2 py-0.5 text-xs rounded-md ${status.color}`}>{status.label}</span></td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                </>
               )}
 
               {/* Progress Bar */}

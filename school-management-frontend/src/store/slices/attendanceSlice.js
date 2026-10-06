@@ -162,12 +162,109 @@ export const applyTemplateToMonth = createAsyncThunk(
   }
 )
 
+// ── Daily Attendance Thunks ──────────────────────────────────────────
+export const markDailyAttendance = createAsyncThunk(
+  'attendance/markDaily',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.markDailyAttendance(payload)
+      toast.success(response.message || 'Daily attendance saved successfully')
+      return response
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to save daily attendance')
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const fetchDailyAttendanceByClass = createAsyncThunk(
+  'attendance/fetchDailyByClass',
+  async ({ classId, date, session }, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.getDailyAttendanceByClass(classId, date, session)
+      return response
+    } catch (error) {
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const fetchDailyAttendanceMatrix = createAsyncThunk(
+  'attendance/fetchDailyMatrix',
+  async ({ classId, year, month }, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.getDailyAttendanceMatrix(classId, year, month)
+      return response
+    } catch (error) {
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const fetchDailyAttendanceByStudent = createAsyncThunk(
+  'attendance/fetchDailyByStudent',
+  async ({ studentId, year, month }, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.getDailyAttendanceByStudent(studentId, year, month)
+      return response
+    } catch (error) {
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const fetchDailyAttendanceDashboardStats = createAsyncThunk(
+  'attendance/fetchDailyDashboardStats',
+  async (date, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.getDailyAttendanceDashboardStats(date)
+      return response
+    } catch (error) {
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const notifyDailyAbsentees = createAsyncThunk(
+  'attendance/notifyDailyAbsentees',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.notifyDailyAbsentees(payload)
+      toast.success(response.message || 'Absence notifications sent')
+      return response
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to notify parents')
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
+export const notifyPendingAttendance = createAsyncThunk(
+  'attendance/notifyPending',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const response = await attendanceService.notifyPendingAttendance(payload)
+      toast.success(response.message || 'Pending attendance reminders sent')
+      return response
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to send reminders')
+      return rejectWithValue(error.response?.data)
+    }
+  }
+)
+
 const initialState = {
   attendance: [],
   studentAttendance: [],
   classAttendance: null,
   summary: null,
   templates: [],
+  // Daily attendance state
+  dailyAttendance: null,
+  dailyMatrix: null,
+  dailyStudentAttendance: null,
+  dailyDashboardStats: null,
+  isDailyLoading: false,
   isLoading: false,
   error: null,
   pagination: {
@@ -187,6 +284,8 @@ const attendanceSlice = createSlice({
       state.studentAttendance = []
       state.classAttendance = null
       state.summary = null
+      state.dailyAttendance = null
+      state.dailyMatrix = null
     },
     clearError: (state) => {
       state.error = null
@@ -248,6 +347,42 @@ const attendanceSlice = createSlice({
       .addCase(fetchAttendanceTemplates.rejected, (state, action) => {
         state.isLoading = false
         state.error = action.payload?.message
+      })
+      // ── Daily Attendance Reducers ──
+      .addCase(fetchDailyAttendanceByClass.pending, (state) => {
+        state.isDailyLoading = true
+      })
+      .addCase(fetchDailyAttendanceByClass.fulfilled, (state, action) => {
+        state.isDailyLoading = false
+        state.dailyAttendance = action.payload
+      })
+      .addCase(fetchDailyAttendanceByClass.rejected, (state, action) => {
+        state.isDailyLoading = false
+        state.error = action.payload?.message
+      })
+      // Daily Matrix
+      .addCase(fetchDailyAttendanceMatrix.pending, (state) => {
+        state.isDailyLoading = true
+      })
+      .addCase(fetchDailyAttendanceMatrix.fulfilled, (state, action) => {
+        state.isDailyLoading = false
+        state.dailyMatrix = action.payload
+      })
+      .addCase(fetchDailyAttendanceMatrix.rejected, (state, action) => {
+        state.isDailyLoading = false
+        state.error = action.payload?.message
+      })
+      // Daily Student
+      .addCase(fetchDailyAttendanceByStudent.fulfilled, (state, action) => {
+        state.dailyStudentAttendance = action.payload
+      })
+      // Daily Dashboard Stats
+      .addCase(fetchDailyAttendanceDashboardStats.fulfilled, (state, action) => {
+        state.dailyDashboardStats = action.payload
+      })
+      // Mark Daily Fulfilled
+      .addCase(markDailyAttendance.fulfilled, (state, action) => {
+        state.isDailyLoading = false
       })
   },
 })

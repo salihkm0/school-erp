@@ -23,12 +23,16 @@ export const CORE_MODULES = [
   },
   {
     id: "attendance-mgmt",
-    title: "Attendance Management",
-    description: "Mark and track attendance through the KlassDesk mobile app with real-time student tracking so teachers and parents stay informed the moment records change.",
+    title: "Daily Attendance & Parent SMS Alerts",
+    description: "Lightning-fast daily roll calls on mobile and web: 1-tap marking, instant SMS/app alerts for absent & late students, monthly matrix registers, and automated report card sync.",
     icon: "CalendarCheck",
     color: "emerald",
-    badge: "Instant Parent SMS",
-    features: ["Period-wise & morning/afternoon roll calls", "Automatic absentee SMS alerts sent instantly to parents", "Official monthly attendance register exports for Govt portals"]
+    badge: "1-Tap Roll Call & SMS",
+    features: [
+      "1-click daily roll calls with Present, Absent, Late, and Leave statuses",
+      "Instant SMS & mobile push notifications dispatched automatically to parents",
+      "31-day full class monthly matrix with Excel export and Govt register format"
+    ]
   },
   {
     id: "academic-mgmt",
@@ -188,19 +192,20 @@ export const ALL_FEATURES: Feature[] = [
   },
   {
     id: "attendance-analytics",
-    title: "Attendance Distribution Engine",
-    subtitle: "Spot Chronic Absenteeism Early",
-    description: "Visual distribution charts group students by attendance brackets. Proactively identify at-risk students before final board eligibility cutoffs with automated warning letters.",
+    title: "Daily Attendance & Parent SMS Alerts",
+    subtitle: "Spot Absenteeism & Notify Parents Instantly",
+    description: "Mark attendance in under 15 seconds per class with multi-status roll calls (Present, Absent, Late, Half-Day, Leave). Instant automated SMS & app notifications to parents for absentees, full 31-day Excel registers, and live campus cockpit.",
     category: "attendance",
-    badge: "Compliance",
-    icon: "BarChart3",
+    badge: "Daily Roll Call",
+    icon: "CalendarCheck",
     highlights: [
-      "Daily and period-by-period roll call logs",
-      "Automated parent SMS trigger when student marked absent",
-      "Monthly register generation compliant with education department norms",
-      "Attendance percentage synced seamlessly into student report cards"
+      "1-click daily class roll calls with quick status toggles and absentee reasons",
+      "Instant SMS and mobile push notification delivery to parents when student is absent",
+      "Interactive 31-day monthly matrix register with Excel download & print support",
+      "Campus-wide live dashboard tracking class-by-class submissions and attendance rates",
+      "Automatic synchronization into monthly report cards and exam eligibility percentages"
     ],
-    stats: { value: "35%", label: "Improvement in student attendance tracking" }
+    stats: { value: "95%", label: "Faster morning roll call & 100% parent visibility" }
   },
   {
     id: "timetable-scheduling",
