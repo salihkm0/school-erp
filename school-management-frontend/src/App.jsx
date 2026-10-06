@@ -1,71 +1,73 @@
-// src/App.jsx
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import Layout from './components/common/Layout'
 import ProtectedRoute from './components/common/ProtectedRoute'
 import PublicRoute from './components/common/PublicRoute'
-import LoginPage from './pages/LoginPage'
-import ForgotPasswordPage from './pages/ForgotPasswordPage'
-import DashboardPage from './pages/DashboardPage'
-import StudentsPage from './pages/StudentsPage'
-import StaffPage from './pages/StaffPage'
-import ClassesPage from './pages/ClassesPage'
-import ExamsPage from './pages/ExamsPage'
-import AttendancePage from './pages/AttendancePage'
-import DutiesPage from './pages/DutiesPage'
-import ParentsPage from './pages/ParentsPage'
-import SubjectsPage from './pages/SubjectsPage'
-import ReportsPage from './pages/ReportsPage'
-import NotificationsPage from './pages/NotificationsPage'
-import SettingsPage from './pages/SettingsPage'
-import EventsPage from './pages/EventsPage'
-import TimetablePage from './pages/TimetablePage'
-import FeeManagementPage from './pages/FeeManagementPage'
-import PdfReports from './components/pdf/PdfReports'
+import LoadingSpinner from './components/common/LoadingSpinner'
 import { checkAuth } from './store/slices/authSlice'
 import { fetchSchoolProfile } from './store/slices/schoolProfileSlice'
 import useSocketInit from './hooks/useSocketInit'
 import useFCMToken from './hooks/useFCMToken.jsx'
 import { Toaster } from 'react-hot-toast'
 
+// Lazy loaded page components
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const StudentsPage = lazy(() => import('./pages/StudentsPage'))
+const StaffPage = lazy(() => import('./pages/StaffPage'))
+const ClassesPage = lazy(() => import('./pages/ClassesPage'))
+const ExamsPage = lazy(() => import('./pages/ExamsPage'))
+const AttendancePage = lazy(() => import('./pages/AttendancePage'))
+const DutiesPage = lazy(() => import('./pages/DutiesPage'))
+const ParentsPage = lazy(() => import('./pages/ParentsPage'))
+const SubjectsPage = lazy(() => import('./pages/SubjectsPage'))
+const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const EventsPage = lazy(() => import('./pages/EventsPage'))
+const TimetablePage = lazy(() => import('./pages/TimetablePage'))
+const FeeManagementPage = lazy(() => import('./pages/FeeManagementPage'))
+const PdfReports = lazy(() => import('./components/pdf/PdfReports'))
+
 // Legal Pages
-import PrivacyPolicy from './pages/legal/PrivacyPolicy'
-import TermsAndConditions from './pages/legal/TermsAndConditions'
+const PrivacyPolicy = lazy(() => import('./pages/legal/PrivacyPolicy'))
+const TermsAndConditions = lazy(() => import('./pages/legal/TermsAndConditions'))
 
-//staff pages
-import MyClassesPage from './pages/staff/MyClassesPage'
-import MyDutiesPage from './pages/staff/MyDutiesPage'
-import StaffAttendancePage from './pages/staff/StaffAttendancePage'
-import StaffExamsPage from './pages/staff/StaffExamsPage'
-import MarksEntryRouter from './pages/staff/MarksEntry/MarksEntryRouter'
-import ClassMarksOverview from './pages/staff/ClassMarksOverview/ClassMarksOverview'
-import ExamForm from './components/exams/ExamForm'
-import ExamReview from './components/exams/ExamReview'
-import HistoricalRecordsFlow from './pages/admin/HistoricalRecords/HistoricalRecordsFlow'
+// Staff pages
+const MyClassesPage = lazy(() => import('./pages/staff/MyClassesPage'))
+const MyDutiesPage = lazy(() => import('./pages/staff/MyDutiesPage'))
+const StaffAttendancePage = lazy(() => import('./pages/staff/StaffAttendancePage'))
+const StaffExamsPage = lazy(() => import('./pages/staff/StaffExamsPage'))
+const MarksEntryRouter = lazy(() => import('./pages/staff/MarksEntry/MarksEntryRouter'))
+const ClassMarksOverview = lazy(() => import('./pages/staff/ClassMarksOverview/ClassMarksOverview'))
+const ExamForm = lazy(() => import('./components/exams/ExamForm'))
+const ExamReview = lazy(() => import('./components/exams/ExamReview'))
+const HistoricalRecordsFlow = lazy(() => import('./pages/admin/HistoricalRecords/HistoricalRecordsFlow'))
 
-//parent pages
-import MyChildrenPage from './pages/parent/MyChildrenPage'
-import MyChildAttendancePage from './pages/parent/MyChildAttendancePage'
-import MyChildResultsPage from './pages/parent/MyChildResultsPage'
-import MyChildFeesPage from './pages/parent/MyChildFeesPage'
+// Parent pages
+const MyChildrenPage = lazy(() => import('./pages/parent/MyChildrenPage'))
+const MyChildAttendancePage = lazy(() => import('./pages/parent/MyChildAttendancePage'))
+const MyChildResultsPage = lazy(() => import('./pages/parent/MyChildResultsPage'))
+const MyChildFeesPage = lazy(() => import('./pages/parent/MyChildFeesPage'))
 
 // Historical records (standalone — does not affect main system)
-import HistoricalImport from './pages/admin/HistoricalImport'
+const HistoricalImport = lazy(() => import('./pages/admin/HistoricalImport'))
 
 // Open Dashboard
-import OpenDashboardRouter from './pages/open/OpenDashboardRouter'
-import OpenLogin from './pages/open/OpenLogin'
+const OpenDashboardRouter = lazy(() => import('./pages/open/OpenDashboardRouter'))
+const OpenLogin = lazy(() => import('./pages/open/OpenLogin'))
 
 // Administration
-import AdministrationLogin from './pages/administration/AdministrationLogin'
-import AdministrationLayout from './pages/administration/AdministrationLayout'
-import AdministrationDashboard from './pages/administration/AdministrationDashboard'
-import SystemLogs from './pages/administration/SystemLogs'
-import AuditLog from './pages/administration/AuditLog'
-import BroadcastCenter from './pages/administration/BroadcastCenter'
-import UserManagement from './pages/administration/UserManagement'
-import ActiveUsers from './pages/administration/ActiveUsers'
+const AdministrationLogin = lazy(() => import('./pages/administration/AdministrationLogin'))
+const AdministrationLayout = lazy(() => import('./pages/administration/AdministrationLayout'))
+const AdministrationDashboard = lazy(() => import('./pages/administration/AdministrationDashboard'))
+const SystemLogs = lazy(() => import('./pages/administration/SystemLogs'))
+const AuditLog = lazy(() => import('./pages/administration/AuditLog'))
+const BroadcastCenter = lazy(() => import('./pages/administration/BroadcastCenter'))
+const UserManagement = lazy(() => import('./pages/administration/UserManagement'))
+const ActiveUsers = lazy(() => import('./pages/administration/ActiveUsers'))
 
 function App() {
   const dispatch = useDispatch()
@@ -196,106 +198,107 @@ function App() {
           },
         }}
       />
-      <Routes>
-        <Route path="/login" element={
-          <PublicRoute>
-            <LoginPage />
-          </PublicRoute>
-        } />
-        
-        <Route path="/forgot-password" element={
-          <PublicRoute>
-            <ForgotPasswordPage />
-          </PublicRoute>
-        } />
+      <Suspense fallback={<LoadingSpinner fullScreen />}>
+        <Routes>
+          <Route path="/login" element={
+            <PublicRoute>
+              <LoginPage />
+            </PublicRoute>
+          } />
+          
+          <Route path="/forgot-password" element={
+            <PublicRoute>
+              <ForgotPasswordPage />
+            </PublicRoute>
+          } />
 
-        {/* Public Legal Pages */}
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-        <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
-        
-        <Route path="/" element={
-          <ProtectedRoute allowedRoles={['admin', 'staff', 'parent']}>
-            <Layout />
-          </ProtectedRoute>
-        }>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="students/*" element={<StudentsPage />} />
-          <Route path="staff/*" element={<StaffPage />} />
-          <Route path="classes/*" element={<ClassesPage />} />
-          <Route path="exams/*" element={<ExamsPage />} />
-          <Route path="attendance/*" element={<AttendancePage />} />
-          <Route path="duties/*" element={<DutiesPage />} />
-          <Route path="events/*" element={<EventsPage />} />
-          <Route path="timetable/*" element={<TimetablePage />} />
-          <Route path="fees/*" element={<FeeManagementPage />} />
-          <Route path="parents/*" element={<ParentsPage />} />
-          <Route path="subjects/*" element={<SubjectsPage />} />
-          <Route path="reports/*" element={<ReportsPage />} />
-          <Route path="notifications/*" element={<NotificationsPage />} />
-          <Route path="settings/*" element={<SettingsPage />} />
-          <Route path="pdf-reports" element={<PdfReports />} />
+          {/* Public Legal Pages */}
+          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+          
+          <Route path="/" element={
+            <ProtectedRoute allowedRoles={['admin', 'staff', 'parent']}>
+              <Layout />
+            </ProtectedRoute>
+          } >
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="students/*" element={<StudentsPage />} />
+            <Route path="staff/*" element={<StaffPage />} />
+            <Route path="classes/*" element={<ClassesPage />} />
+            <Route path="exams/*" element={<ExamsPage />} />
+            <Route path="attendance/*" element={<AttendancePage />} />
+            <Route path="duties/*" element={<DutiesPage />} />
+            <Route path="events/*" element={<EventsPage />} />
+            <Route path="timetable/*" element={<TimetablePage />} />
+            <Route path="fees/*" element={<FeeManagementPage />} />
+            <Route path="parents/*" element={<ParentsPage />} />
+            <Route path="subjects/*" element={<SubjectsPage />} />
+            <Route path="reports/*" element={<ReportsPage />} />
+            <Route path="notifications/*" element={<NotificationsPage />} />
+            <Route path="settings/*" element={<SettingsPage />} />
+            <Route path="pdf-reports" element={<PdfReports />} />
 
-          {/* Staff routes */}
-          <Route path="staff/my-classes" element={<MyClassesPage />} />
-          <Route path="staff/my-duties" element={<MyDutiesPage />} />
-          <Route path="staff/attendance" element={<StaffAttendancePage />} />
-          <Route path="staff/exams" element={<StaffExamsPage />} />
-          <Route path="staff/exams/create" element={<ExamForm />} />
-          <Route path="staff/exams/edit/:id" element={<ExamForm />} />
-          <Route path="staff/exams/results/:examId" element={<ExamReview />} />
-          <Route path="staff/marks-entry/*" element={<MarksEntryRouter />} />
-          <Route path="staff/class-marks/:classId" element={<ClassMarksOverview />} />
-          <Route path="staff/class-marks" element={<ClassMarksOverview />} />
-          <Route path="admin/class-marks/:classId" element={<ClassMarksOverview />} />
-          <Route path="admin/class-marks" element={<ClassMarksOverview />} />
+            {/* Staff routes */}
+            <Route path="staff/my-classes" element={<MyClassesPage />} />
+            <Route path="staff/my-duties" element={<MyDutiesPage />} />
+            <Route path="staff/attendance" element={<StaffAttendancePage />} />
+            <Route path="staff/exams" element={<StaffExamsPage />} />
+            <Route path="staff/exams/create" element={<ExamForm />} />
+            <Route path="staff/exams/edit/:id" element={<ExamForm />} />
+            <Route path="staff/exams/results/:examId" element={<ExamReview />} />
+            <Route path="staff/marks-entry/*" element={<MarksEntryRouter />} />
+            <Route path="staff/class-marks/:classId" element={<ClassMarksOverview />} />
+            <Route path="staff/class-marks" element={<ClassMarksOverview />} />
+            <Route path="admin/class-marks/:classId" element={<ClassMarksOverview />} />
+            <Route path="admin/class-marks" element={<ClassMarksOverview />} />
 
+            {/* Parent routes */}
+            <Route path="my-children" element={<MyChildrenPage />} />
+            <Route path="my-child-attendance" element={<MyChildAttendancePage />} />
+            <Route path="my-child-results" element={<MyChildResultsPage />} />  
+            <Route path="my-child-fees" element={<MyChildFeesPage />} />  
 
+            {/* Historical import — admin only */}
+            <Route path="historical-records/*" element={<HistoricalRecordsFlow />} />
+            <Route path="admin/marks-entry/*" element={<MarksEntryRouter />} />
+          </Route>        
 
-          {/* Parent routes */}
-          <Route path="my-children" element={<MyChildrenPage />} />
-          <Route path="my-child-attendance" element={<MyChildAttendancePage />} />
-          <Route path="my-child-results" element={<MyChildResultsPage />} />  
-          <Route path="my-child-fees" element={<MyChildFeesPage />} />  
+          <Route path="/open/login" element={
+            <PublicRoute>
+              <OpenLogin />
+            </PublicRoute>
+          } />
 
-          {/* Historical import — admin only */}
-          <Route path="historical-records/*" element={<HistoricalRecordsFlow />} />
-          <Route path="admin/marks-entry/*" element={<MarksEntryRouter />} />
-        </Route>        
+          {/* Administration Routes */}
+          <Route path="/administration/login" element={
+            <PublicRoute>
+              <AdministrationLogin />
+            </PublicRoute>
+          } />
 
-        <Route path="/open/login" element={
-          <PublicRoute>
-            <OpenLogin />
-          </PublicRoute>
-        } />
+          <Route path="/administration" element={
+            <ProtectedRoute allowedRoles={['administration']}>
+              <AdministrationLayout />
+            </ProtectedRoute>
+          }>
+            <Route index element={<AdministrationDashboard />} />
+            <Route path="logs" element={<SystemLogs />} />
+            <Route path="audit" element={<AuditLog />} />
+            <Route path="broadcast" element={<BroadcastCenter />} />
+            <Route path="users" element={<UserManagement />} />
+            <Route path="active-users" element={<ActiveUsers />} />
+          </Route>
 
-        {/* Administration Routes */}
-        <Route path="/administration/login" element={
-          <PublicRoute>
-            <AdministrationLogin />
-          </PublicRoute>
-        } />
-        <Route path="/administration" element={
-          <ProtectedRoute allowedRoles={['administration']}>
-            <AdministrationLayout />
-          </ProtectedRoute>
-        }>
-          <Route index element={<AdministrationDashboard />} />
-          <Route path="logs" element={<SystemLogs />} />
-          <Route path="audit" element={<AuditLog />} />
-          <Route path="broadcast" element={<BroadcastCenter />} />
-          <Route path="users" element={<UserManagement />} />
-          <Route path="active-users" element={<ActiveUsers />} />
-        </Route>
+          <Route path="/open/*" element={
+            <ProtectedRoute allowedRoles={['open']}>
+              <OpenDashboardRouter />
+            </ProtectedRoute>
+          } />
 
-        <Route path="/open/*" element={
-          <ProtectedRoute allowedRoles={['open']}>
-            <OpenDashboardRouter />
-          </ProtectedRoute>
-        } />
-
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </>
   )
 }
