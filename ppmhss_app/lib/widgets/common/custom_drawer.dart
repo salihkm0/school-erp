@@ -295,6 +295,24 @@ class _CustomDrawerState extends State<CustomDrawer> {
                         ),
                         _buildModernMenuItem(
                           context: context,
+                          icon: Icons.schedule_outlined,
+                          title: 'Timetable',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/timetable');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.emoji_events_outlined,
+                          title: 'Events & Fests',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/events');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
                           icon: Icons.assignment_outlined,
                           title: 'Exams',
                           onTap: () {
@@ -338,6 +356,26 @@ class _CustomDrawerState extends State<CustomDrawer> {
 
                         _buildModernMenuItem(
                           context: context,
+                          icon: Icons.schedule_outlined,
+                          title: 'My Timetable',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/timetable');
+                          },
+                        ),
+
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.emoji_events_outlined,
+                          title: 'Events & Fests',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/events');
+                          },
+                        ),
+
+                        _buildModernMenuItem(
+                          context: context,
                           icon: Icons.work_outline,
                           title: 'My Duties',
                           onTap: () {
@@ -367,6 +405,24 @@ class _CustomDrawerState extends State<CustomDrawer> {
                           onTap: () {
                             Navigator.pop(context);
                             Navigator.pushNamed(context, '/my-child-attendance');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.schedule_outlined,
+                          title: 'Class Timetable',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/timetable');
+                          },
+                        ),
+                        _buildModernMenuItem(
+                          context: context,
+                          icon: Icons.emoji_events_outlined,
+                          title: 'Events & Fests',
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.pushNamed(context, '/events');
                           },
                         ),
                         _buildModernMenuItem(

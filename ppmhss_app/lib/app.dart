@@ -63,6 +63,8 @@ import 'package:school_management/screens/staff/staff_attendance_page.dart';
 import 'package:school_management/screens/staff/staff_exams_page.dart';
 import 'package:school_management/screens/staff/staff_marks_entry.dart';
 import 'package:school_management/screens/reports/staff_analytics_screen.dart';
+import 'package:school_management/screens/timetable/timetable_screen.dart';
+import 'package:school_management/screens/events/events_screen.dart';
 
 // Maintenance
 import 'package:school_management/screens/maintenance_screen.dart';
@@ -345,6 +347,19 @@ Route<dynamic>? generateAppRoute(RouteSettings settings) {
       case '/marks/entry':
         return MaterialPageRoute(
           builder: (_) => const MarksEntryScreen(),
+          settings: settings,
+        );
+      
+      // ==================== TIMETABLE & EVENTS ROUTES ====================
+      case '/timetable':
+        final classId = settings.arguments as String?;
+        return MaterialPageRoute(
+          builder: (_) => TimetableScreen(initialClassId: classId),
+          settings: settings,
+        );
+      case '/events':
+        return MaterialPageRoute(
+          builder: (_) => const EventsScreen(),
           settings: settings,
         );
       
