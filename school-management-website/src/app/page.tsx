@@ -5,6 +5,7 @@ import Navbar from '@/components/Navbar';
 import Hero from '@/components/Hero';
 import CoreModulesGrid from '@/components/CoreModulesGrid';
 import EventsShowcase from '@/components/EventsShowcase';
+import TimetableShowcase from '@/components/TimetableShowcase';
 import FeatureExplorer from '@/components/FeatureExplorer';
 import DeepDiveFeatures from '@/components/DeepDiveFeatures';
 import RoiCalculator from '@/components/RoiCalculator';
@@ -45,6 +46,9 @@ export default function Home() {
 
       {/* Flagship New Section: Annual Sports Meet & Arts Fest (Kalolsavam) */}
       <EventsShowcase onOpenDemoModal={openDemoModal} />
+
+      {/* Flagship New Section: Institutional Timetable & Clash Engine */}
+      <TimetableShowcase onOpenDemoModal={openDemoModal} />
 
       {/* Interactive Academic & Examination Deep Dive */}
       <FeatureExplorer />
