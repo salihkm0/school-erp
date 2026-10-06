@@ -1,3 +1,4 @@
+// src/services/eventService.js
 import api from './api';
 
 const eventService = {
@@ -88,6 +89,71 @@ const eventService = {
   // Live Leaderboard
   getLeaderboard: async (eventId) => {
     const response = await api.get(`/events/${eventId}/leaderboard`);
+    return response.data?.data;
+  },
+
+  // Multi-Judge Rubric Scoring & Tabulation
+  submitJudgeScore: async (eventId, itemId, scoreData) => {
+    const response = await api.post(`/events/${eventId}/items/${itemId}/judge-scores`, scoreData);
+    return response.data;
+  },
+
+  getItemScoreSheets: async (eventId, itemId) => {
+    const response = await api.get(`/events/${eventId}/items/${itemId}/judge-scores`);
+    return response.data?.data;
+  },
+
+  tabulateAndPublishItem: async (eventId, itemId) => {
+    const response = await api.post(`/events/${eventId}/items/${itemId}/tabulate`);
+    return response.data;
+  },
+
+  // Stage Manager & Live Stage Monitors
+  getStageLiveStatus: async (eventId) => {
+    const response = await api.get(`/events/${eventId}/stage-status`);
+    return response.data?.data;
+  },
+
+  updateStageLiveStatus: async (eventId, itemId, stageData) => {
+    const response = await api.put(`/events/${eventId}/items/${itemId}/stage-status`, stageData);
+    return response.data?.data;
+  },
+
+  generateLotOrder: async (eventId, itemId) => {
+    const response = await api.post(`/events/${eventId}/items/${itemId}/generate-lot-order`);
+    return response.data?.data;
+  },
+
+  // Individual Champions & Titles
+  getIndividualChampionships: async (eventId) => {
+    const response = await api.get(`/events/${eventId}/championships`);
+    return response.data?.data;
+  },
+
+  // Printables (Badges & Certificates)
+  getPrintableBadges: async (eventId, params) => {
+    const response = await api.get(`/events/${eventId}/badges`, { params });
+    return response.data?.data;
+  },
+
+  getPrintableCertificates: async (eventId, params) => {
+    const response = await api.get(`/events/${eventId}/certificates`, { params });
+    return response.data?.data;
+  },
+
+  // Appeals & Grievances
+  submitAppeal: async (eventId, appealData) => {
+    const response = await api.post(`/events/${eventId}/appeals`, appealData);
+    return response.data?.data;
+  },
+
+  getAppeals: async (eventId, params) => {
+    const response = await api.get(`/events/${eventId}/appeals`, { params });
+    return response.data?.data;
+  },
+
+  reviewAppeal: async (eventId, appealId, reviewData) => {
+    const response = await api.put(`/events/${eventId}/appeals/${appealId}/review`, reviewData);
     return response.data?.data;
   },
 };

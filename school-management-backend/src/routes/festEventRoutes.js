@@ -19,12 +19,26 @@ const {
   recordItemResult,
   getEventResults,
   getEventLeaderboard,
+  submitJudgeScoreSheet,
+  getItemScoreSheets,
+  tabulateAndPublishItem,
+  updateStageLiveStatus,
+  getStageLiveStatus,
+  generateLotOrder,
+  getIndividualChampionships,
+  getPrintableBadges,
+  getPrintableCertificates,
+  submitAppeal,
+  getAppeals,
+  reviewAppeal,
 } = require('../controllers/festEventController');
 const { protect, authorize } = require('../middleware/auth');
 
-// Public or Authenticated Live Leaderboard (Accessible for Projectors / Displays / Students)
+// Public or Authenticated Live Leaderboard / Stage Monitors (Accessible for Projectors / Displays / Students)
 router.get('/:id/leaderboard', getEventLeaderboard);
 router.get('/:id/results', getEventResults);
+router.get('/:id/stage-status', getStageLiveStatus);
+router.get('/:id/championships', getIndividualChampionships);
 
 // Authenticated Routes
 router.use(protect);
@@ -48,8 +62,24 @@ router.post('/:id/participants/register', authorize('admin', 'staff'), registerP
 router.post('/:id/participants/bulk-register', authorize('admin', 'staff'), bulkRegisterParticipants);
 router.post('/:id/generate-chest-numbers', authorize('admin', 'staff'), generateChestNumbers);
 
-// 4. Judges Call Sheet & Results
+// 4. Judges Call Sheet, Multi-Judge Scoring & Tabulation
 router.get('/:id/items/:itemId/call-sheet', getItemCallSheet);
 router.post('/:id/items/:itemId/results', authorize('admin', 'staff'), recordItemResult);
+router.get('/:id/items/:itemId/judge-scores', getItemScoreSheets);
+router.post('/:id/items/:itemId/judge-scores', authorize('admin', 'staff'), submitJudgeScoreSheet);
+router.post('/:id/items/:itemId/tabulate', authorize('admin', 'staff'), tabulateAndPublishItem);
+
+// 5. Stage Manager & Lot Order
+router.put('/:id/items/:itemId/stage-status', authorize('admin', 'staff'), updateStageLiveStatus);
+router.post('/:id/items/:itemId/generate-lot-order', authorize('admin', 'staff'), generateLotOrder);
+
+// 6. Printables (Badges & Certificates)
+router.get('/:id/badges', getPrintableBadges);
+router.get('/:id/certificates', getPrintableCertificates);
+
+// 7. Appeals & Grievances
+router.get('/:id/appeals', getAppeals);
+router.post('/:id/appeals', submitAppeal);
+router.put('/:id/appeals/:appealId/review', authorize('admin', 'staff'), reviewAppeal);
 
 module.exports = router;

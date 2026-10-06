@@ -3,7 +3,10 @@ const FestEvent = require('../models/FestEvent');
 const EventItem = require('../models/EventItem');
 const EventParticipant = require('../models/EventParticipant');
 const EventResult = require('../models/EventResult');
+const EventScoreSheet = require('../models/EventScoreSheet');
+const EventAppeal = require('../models/EventAppeal');
 const Student = require('../models/Student');
+const { getSchoolProfile } = require('../utils/schoolProfileHelper');
 const { getIO } = require('../config/socket');
 
 // Helper to broadcast live event updates
@@ -891,3 +894,729 @@ exports.getEventLeaderboard = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ==========================================
+// 6. MULTI-JUDGE SCORING & TABULATION
+// ==========================================
+
+exports.submitJudgeScoreSheet = async (req, res) => {
+  try {
+    const { id: eventId, itemId } = req.params;
+    const {
+      chestNumber,
+      judgeName,
+      judgeCode = 'J1',
+      criteriaScores = [],
+      deductions = 0,
+      remarks = '',
+    } = req.body;
+
+    if (!chestNumber || !judgeName) {
+      return res.status(400).json({ success: false, message: 'Chest number and judge name are required' });
+    }
+
+    const participant = await EventParticipant.findOne({ event: eventId, chestNumber });
+    if (!participant) {
+      return res.status(404).json({ success: false, message: `Participant with chest number ${chestNumber} not found` });
+    }
+
+    const totalMarks = criteriaScores.reduce((acc, curr) => acc + (Number(curr.marksGiven) || 0), 0);
+    const finalMarks = Math.max(0, totalMarks - (Number(deductions) || 0));
+
+    const scoreSheet = await EventScoreSheet.findOneAndUpdate(
+      {
+        event: eventId,
+        item: itemId,
+        chestNumber,
+        judgeCode: judgeCode.trim().toUpperCase(),
+      },
+      {
+        event: eventId,
+        item: itemId,
+        participant: participant._id,
+        chestNumber,
+        student: participant.student,
+        judgeName: judgeName.trim(),
+        judgeCode: judgeCode.trim().toUpperCase(),
+        criteriaScores,
+        totalMarks,
+        deductions: Number(deductions) || 0,
+        finalMarks,
+        remarks: remarks || '',
+        isFinalized: true,
+      },
+      { new: true, upsert: true }
+    );
+
+    res.json({
+      success: true,
+      message: `Score recorded by Judge ${judgeCode} for chest #${chestNumber}`,
+      data: scoreSheet,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getItemScoreSheets = async (req, res) => {
+  try {
+    const { id: eventId, itemId } = req.params;
+    const item = await EventItem.findById(itemId);
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'Item not found' });
+    }
+
+    const participants = await EventParticipant.find({ event: eventId, registeredItems: itemId })
+      .populate('student', 'fullName admissionNo rollNumber gender currentClass photo')
+      .sort({ chestNumber: 1 });
+
+    const scoreSheets = await EventScoreSheet.find({ event: eventId, item: itemId })
+      .populate('student', 'fullName admissionNo');
+
+    // Group scores by chestNumber
+    const summaryByChest = {};
+
+    participants.forEach((p) => {
+      summaryByChest[p.chestNumber] = {
+        participantId: p._id,
+        chestNumber: p.chestNumber,
+        student: p.student,
+        groupName: p.groupName,
+        groupColor: p.groupColor,
+        category: p.category,
+        scoresByJudge: {},
+        totalSum: 0,
+        judgeCount: 0,
+        averageFinalMarks: 0,
+        remarks: [],
+      };
+    });
+
+    scoreSheets.forEach((s) => {
+      if (summaryByChest[s.chestNumber]) {
+        summaryByChest[s.chestNumber].scoresByJudge[s.judgeCode] = s;
+        summaryByChest[s.chestNumber].totalSum += s.finalMarks;
+        summaryByChest[s.chestNumber].judgeCount += 1;
+        if (s.remarks) {
+          summaryByChest[s.chestNumber].remarks.push(`${s.judgeCode}: ${s.remarks}`);
+        }
+      }
+    });
+
+    Object.values(summaryByChest).forEach((itemSum) => {
+      if (itemSum.judgeCount > 0) {
+        itemSum.averageFinalMarks = Number((itemSum.totalSum / itemSum.judgeCount).toFixed(2));
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        item,
+        criteria: item.criteria || [],
+        assignedJudges: item.assignedJudges || [],
+        participants,
+        scoreSheets,
+        summaryByChest: Object.values(summaryByChest).sort((a, b) => b.averageFinalMarks - a.averageFinalMarks),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.tabulateAndPublishItem = async (req, res) => {
+  try {
+    const { id: eventId, itemId } = req.params;
+    const event = await FestEvent.findById(eventId);
+    const item = await EventItem.findById(itemId);
+
+    if (!event || !item) {
+      return res.status(404).json({ success: false, message: 'Event or Item not found' });
+    }
+
+    const participants = await EventParticipant.find({ event: eventId, registeredItems: itemId })
+      .populate('student', 'fullName admissionNo rollNumber currentClass photo');
+
+    const scoreSheets = await EventScoreSheet.find({ event: eventId, item: itemId });
+
+    if (scoreSheets.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No judge scorecards entered yet. Please enter judge marks before tabulating.',
+      });
+    }
+
+    // Calculate average final marks per participant
+    const scoresMap = {};
+    scoreSheets.forEach((s) => {
+      if (!scoresMap[s.chestNumber]) {
+        scoresMap[s.chestNumber] = { total: 0, count: 0, participant: s.participant, student: s.student };
+      }
+      scoresMap[s.chestNumber].total += s.finalMarks;
+      scoresMap[s.chestNumber].count += 1;
+    });
+
+    const rankedList = Object.keys(scoresMap).map((chestNumber) => {
+      const avg = Number((scoresMap[chestNumber].total / scoresMap[chestNumber].count).toFixed(2));
+      const p = participants.find((pt) => pt.chestNumber === chestNumber);
+      return {
+        chestNumber,
+        averageMarks: avg,
+        participant: p,
+      };
+    }).filter((r) => r.participant);
+
+    // Sort descending by average marks
+    rankedList.sort((a, b) => b.averageMarks - a.averageMarks);
+
+    // Max possible criteria marks
+    const maxItemMarks = (item.criteria && item.criteria.length > 0)
+      ? item.criteria.reduce((sum, c) => sum + (c.maxMarks || 10), 0)
+      : 100;
+
+    // Determine position points
+    const pointSystem = event.pointSystem || {};
+    const isGroup = item.itemType === 'group';
+    const firstPts = item.pointsOverride?.first ?? (isGroup ? pointSystem.groupFirst : pointSystem.individualFirst) ?? 5;
+    const secondPts = item.pointsOverride?.second ?? (isGroup ? pointSystem.groupSecond : pointSystem.individualSecond) ?? 3;
+    const thirdPts = item.pointsOverride?.third ?? (isGroup ? pointSystem.groupThird : pointSystem.individualThird) ?? 1;
+
+    const gradePointsMap = pointSystem.gradePoints || { A: 5, B: 3, C: 1 };
+
+    const winners = [];
+
+    rankedList.forEach((entry, idx) => {
+      const position = idx + 1; // 1, 2, 3...
+      const percentage = (entry.averageMarks / maxItemMarks) * 100;
+      let grade = 'None';
+      if (percentage >= 70) grade = 'A';
+      else if (percentage >= 60) grade = 'B';
+      else if (percentage >= 50) grade = 'C';
+
+      let posPoints = 0;
+      if (position === 1) posPoints = firstPts;
+      else if (position === 2) posPoints = secondPts;
+      else if (position === 3) posPoints = thirdPts;
+
+      const gradeBonus = gradePointsMap[grade] || 0;
+      const totalPointsAwarded = posPoints + gradeBonus;
+
+      if (position <= 3 || grade !== 'None') {
+        winners.push({
+          position: position <= 3 ? position : 4, // 4 for consolation / grade only
+          participant: entry.participant._id,
+          student: entry.participant.student?._id || entry.participant.student,
+          studentName: entry.participant.student?.fullName || 'Participant',
+          admissionNo: entry.participant.student?.admissionNo || '',
+          chestNumber: entry.chestNumber,
+          group: entry.participant.group,
+          groupName: entry.participant.groupName,
+          groupColor: entry.participant.groupColor,
+          grade,
+          scoreOrTime: `${entry.averageMarks} pts (${percentage.toFixed(1)}%)`,
+          pointsAwarded: totalPointsAwarded,
+        });
+      }
+    });
+
+    const result = await EventResult.findOneAndUpdate(
+      { event: eventId, item: itemId },
+      {
+        event: eventId,
+        item: itemId,
+        winners,
+        published: true,
+        publishedAt: new Date(),
+        publishedBy: req.user?._id,
+        remarks: `Tabulated automatically from ${scoreSheets.length} judge scorecard(s).`,
+      },
+      { new: true, upsert: true }
+    );
+
+    // Update item status to completed
+    item.status = 'completed';
+    item.stageStatus = 'completed';
+    await item.save();
+
+    // Recalculate event points
+    await recalculateEventPoints(eventId);
+
+    // Broadcast live updates
+    const leaderboard = await getLeaderboardData(eventId);
+    broadcastEventUpdate('event_points_updated', {
+      eventId,
+      item: { id: item._id, name: item.name, category: item.category },
+      leaderboard,
+      message: `Results tabulated and published for ${item.name}!`,
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully tabulated and published results for ${item.name}`,
+      data: result,
+      leaderboard,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 7. STAGE MANAGER & LIVE VENUE CONTROLLER
+// ==========================================
+
+exports.updateStageLiveStatus = async (req, res) => {
+  try {
+    const { id: eventId, itemId } = req.params;
+    const {
+      stageStatus,
+      currentPerformingChest,
+      callQueue,
+      lotOrder,
+      stageStartTime,
+    } = req.body;
+
+    const item = await EventItem.findById(itemId);
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'Item not found' });
+    }
+
+    if (stageStatus) item.stageStatus = stageStatus;
+    if (currentPerformingChest !== undefined) item.currentPerformingChest = currentPerformingChest;
+    if (callQueue) item.callQueue = callQueue;
+    if (lotOrder) item.lotOrder = lotOrder;
+    if (stageStartTime) item.stageStartTime = stageStartTime;
+
+    await item.save();
+
+    // Broadcast stage live status to all clients
+    try {
+      const io = getIO();
+      if (io) {
+        io.emit('stage_status_updated', {
+          eventId,
+          itemId: item._id,
+          itemName: item.name,
+          category: item.category,
+          stageVenue: item.stageVenue,
+          stageStatus: item.stageStatus,
+          currentPerformingChest: item.currentPerformingChest,
+          callQueue: item.callQueue,
+          stageStartTime: item.stageStartTime,
+          timeLimitMinutes: item.timeLimitMinutes,
+          warningBellMinutes: item.warningBellMinutes,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.error('Socket stage broadcast error:', err.message);
+    }
+
+    res.json({ success: true, data: item });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStageLiveStatus = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const items = await EventItem.find({
+      event: eventId,
+    }).sort({ stageVenue: 1, scheduledDate: 1, scheduledTime: 1 });
+
+    // Group items by stageVenue
+    const stages = {};
+
+    items.forEach((item) => {
+      const venue = item.stageVenue || 'Main Stage';
+      if (!stages[venue]) {
+        stages[venue] = {
+          venueName: venue,
+          activeItem: null,
+          upcomingItems: [],
+          completedItems: [],
+        };
+      }
+
+      if (['in_progress', 'call_ready', 'paused'].includes(item.stageStatus)) {
+        stages[venue].activeItem = item;
+      } else if (item.status === 'completed' || item.stageStatus === 'completed') {
+        stages[venue].completedItems.push(item);
+      } else {
+        stages[venue].upcomingItems.push(item);
+      }
+    });
+
+    res.json({ success: true, data: Object.values(stages) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.generateLotOrder = async (req, res) => {
+  try {
+    const { id: eventId, itemId } = req.params;
+    const participants = await EventParticipant.find({ event: eventId, registeredItems: itemId });
+
+    if (participants.length === 0) {
+      return res.status(400).json({ success: false, message: 'No registered participants for this item' });
+    }
+
+    // Shuffle participants randomly
+    const shuffled = [...participants].sort(() => Math.random() - 0.5);
+    const lotOrder = shuffled.map((p, idx) => ({
+      chestNumber: p.chestNumber,
+      orderNumber: idx + 1,
+      called: false,
+      absent: false,
+    }));
+
+    const item = await EventItem.findByIdAndUpdate(
+      itemId,
+      {
+        lotOrder,
+        callQueue: lotOrder.slice(0, 3).map((l) => l.chestNumber),
+      },
+      { new: true }
+    );
+
+    res.json({ success: true, message: 'Performance lot numbers assigned randomly', data: item });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 8. INDIVIDUAL CHAMPIONSHIPS & TITLES
+// ==========================================
+
+exports.getIndividualChampionships = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const event = await FestEvent.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+
+    const participants = await EventParticipant.find({ event: eventId, totalPoints: { $gt: 0 } })
+      .populate('student', 'fullName studentCode admissionNo rollNumber gender currentClass photo')
+      .sort({ totalPoints: -1, goldCount: -1, silverCount: -1, bronzeCount: -1 });
+
+    // Fetch item win breakdown for top candidates
+    const results = await EventResult.find({ event: eventId, published: true })
+      .populate('item', 'name category itemType code');
+
+    const participantWinsMap = {};
+    results.forEach((r) => {
+      (r.winners || []).forEach((w) => {
+        const pId = w.participant?.toString();
+        if (pId) {
+          if (!participantWinsMap[pId]) {
+            participantWinsMap[pId] = [];
+          }
+          participantWinsMap[pId].push({
+            itemName: r.item?.name || 'Item',
+            itemCategory: r.item?.category || 'General',
+            position: w.position,
+            grade: w.grade,
+            points: w.pointsAwarded,
+          });
+        }
+      });
+    });
+
+    const enrichedParticipants = participants.map((p) => ({
+      ...p.toObject(),
+      wins: participantWinsMap[p._id.toString()] || [],
+    }));
+
+    // Segregate by Gender
+    const maleParticipants = enrichedParticipants.filter((p) => p.student?.gender === 'M' || p.student?.gender === 'Boy');
+    const femaleParticipants = enrichedParticipants.filter((p) => p.student?.gender === 'F' || p.student?.gender === 'Girl');
+
+    // Segregate by Category
+    const categoryChampions = {};
+    (event.categories || ['Sub-Junior', 'Junior', 'Senior', 'General']).forEach((cat) => {
+      const catParticipants = enrichedParticipants.filter((p) => p.category === cat);
+      categoryChampions[cat] = {
+        topBoy: catParticipants.find((p) => p.student?.gender === 'M' || p.student?.gender === 'Boy') || null,
+        topGirl: catParticipants.find((p) => p.student?.gender === 'F' || p.student?.gender === 'Girl') || null,
+        overall: catParticipants[0] || null,
+        leaderboard: catParticipants.slice(0, 5),
+      };
+    });
+
+    const titles = event.titlesConfig || {
+      maleChampionTitle: 'Kalaprathibha',
+      femaleChampionTitle: 'Kalathilakam',
+      generalChampionTitle: 'Overall Champion',
+    };
+
+    res.json({
+      success: true,
+      data: {
+        titles,
+        maleChampion: maleParticipants[0] || null,
+        femaleChampion: femaleParticipants[0] || null,
+        overallChampion: enrichedParticipants[0] || null,
+        maleLeaderboard: maleParticipants.slice(0, 10),
+        femaleLeaderboard: femaleParticipants.slice(0, 10),
+        overallLeaderboard: enrichedParticipants.slice(0, 15),
+        categoryChampions,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 9. PRINTABLE CHEST BADGES & CERTIFICATES
+// ==========================================
+
+exports.getPrintableBadges = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const { group, category, search } = req.query;
+
+    const event = await FestEvent.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+
+    const schoolProfile = await getSchoolProfile();
+
+    const query = { event: eventId };
+    if (group) query.group = group;
+    if (category) query.category = category;
+
+    let participants = await EventParticipant.find(query)
+      .populate('student', 'fullName admissionNo rollNumber currentClass photo gender')
+      .populate('registeredItems', 'name code category stageVenue')
+      .sort({ chestNumber: 1 });
+
+    if (search) {
+      const regex = new RegExp(search, 'i');
+      participants = participants.filter((p) =>
+        p.chestNumber.match(regex) ||
+        p.student?.fullName?.match(regex) ||
+        p.student?.admissionNo?.match(regex)
+      );
+    }
+
+    res.json({
+      success: true,
+      data: {
+        event: {
+          _id: event._id,
+          name: event.name,
+          eventType: event.eventType,
+          startDate: event.startDate,
+          endDate: event.endDate,
+          venue: event.venue,
+        },
+        schoolProfile: {
+          name: schoolProfile.name,
+          shortName: schoolProfile.shortName,
+          logoUrl: schoolProfile.branding?.logoUrl || '',
+          affiliation: schoolProfile.affiliation,
+          address: schoolProfile.address,
+        },
+        participants,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPrintableCertificates = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const { itemId, winnerOnly = 'true' } = req.query;
+
+    const event = await FestEvent.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+
+    const schoolProfile = await getSchoolProfile();
+
+    const resultQuery = { event: eventId, published: true };
+    if (itemId) resultQuery.item = itemId;
+
+    const results = await EventResult.find(resultQuery)
+      .populate('item', 'name code category itemType scheduledDate')
+      .populate('winners.student', 'fullName admissionNo rollNumber currentClass gender photo');
+
+    const certificates = [];
+    let certCounter = 1001;
+
+    results.forEach((r) => {
+      (r.winners || []).forEach((w) => {
+        if (winnerOnly === 'false' || (w.position >= 1 && w.position <= 3) || ['A', 'B', 'C'].includes(w.grade)) {
+          let rankLabel = 'Participation';
+          if (w.position === 1) rankLabel = 'FIRST PLACE (1st)';
+          else if (w.position === 2) rankLabel = 'SECOND PLACE (2nd)';
+          else if (w.position === 3) rankLabel = 'THIRD PLACE (3rd)';
+          else if (w.grade && w.grade !== 'None') rankLabel = `${w.grade} GRADE`;
+
+          certificates.push({
+            certificateNo: `${event.name.slice(0, 3).toUpperCase()}-${r.item?.code || 'ITM'}-${certCounter++}`,
+            studentName: w.studentName || w.student?.fullName || 'Student',
+            admissionNo: w.admissionNo || w.student?.admissionNo || '',
+            chestNumber: w.chestNumber,
+            currentClass: w.student?.currentClass?.name || 'Class Student',
+            groupName: w.groupName,
+            groupColor: w.groupColor,
+            itemName: r.item?.name || 'Competition Item',
+            itemCategory: r.item?.category || 'General',
+            position: w.position,
+            rankLabel,
+            grade: w.grade,
+            points: w.pointsAwarded,
+            eventDate: r.item?.scheduledDate || event.startDate,
+          });
+        }
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        event: {
+          _id: event._id,
+          name: event.name,
+          eventType: event.eventType,
+          startDate: event.startDate,
+          endDate: event.endDate,
+          venue: event.venue,
+          certificateConfig: event.certificateConfig,
+        },
+        schoolProfile: {
+          name: schoolProfile.name,
+          shortName: schoolProfile.shortName,
+          logoUrl: schoolProfile.branding?.logoUrl || '',
+          principalSignatureUrl: schoolProfile.branding?.principalSignatureUrl || '',
+          schoolSealUrl: schoolProfile.branding?.schoolSealUrl || '',
+          address: schoolProfile.address,
+        },
+        certificates,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==========================================
+// 10. APPEALS & GRIEVANCE MANAGEMENT
+// ==========================================
+
+exports.submitAppeal = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const {
+      itemId,
+      chestNumber,
+      appellantName,
+      appellantRole,
+      phone,
+      reason,
+      feePaid = true,
+      feeAmount = 500,
+    } = req.body;
+
+    if (!itemId || !chestNumber || !appellantName || !reason) {
+      return res.status(400).json({ success: false, message: 'Please provide item, chest number, appellant name, and reason' });
+    }
+
+    const participant = await EventParticipant.findOne({ event: eventId, chestNumber });
+    if (!participant) {
+      return res.status(404).json({ success: false, message: `Participant ${chestNumber} not found` });
+    }
+
+    const appeal = await EventAppeal.create({
+      event: eventId,
+      item: itemId,
+      participant: participant._id,
+      student: participant.student,
+      studentName: req.body.studentName || 'Student',
+      chestNumber,
+      groupName: participant.groupName,
+      appellantName,
+      appellantRole: appellantRole || 'House Master',
+      phone: phone || '',
+      reason,
+      feePaid,
+      feeAmount: Number(feeAmount) || 500,
+      status: 'submitted',
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Appeal submitted successfully to the Appeal Committee',
+      data: appeal,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAppeals = async (req, res) => {
+  try {
+    const { id: eventId } = req.params;
+    const { status, itemId } = req.query;
+
+    const query = { event: eventId };
+    if (status) query.status = status;
+    if (itemId) query.item = itemId;
+
+    const appeals = await EventAppeal.find(query)
+      .populate('item', 'name category code')
+      .populate('student', 'fullName admissionNo')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, data: appeals });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.reviewAppeal = async (req, res) => {
+  try {
+    const { id: eventId, appealId } = req.params;
+    const { status, reviewNotes } = req.body;
+
+    if (!['under_review', 'accepted', 'rejected'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid appeal status' });
+    }
+
+    const appeal = await EventAppeal.findOneAndUpdate(
+      { _id: appealId, event: eventId },
+      {
+        status,
+        reviewNotes: reviewNotes || '',
+        reviewedBy: req.user?._id,
+        reviewedAt: new Date(),
+      },
+      { new: true }
+    ).populate('item', 'name');
+
+    if (!appeal) {
+      return res.status(404).json({ success: false, message: 'Appeal not found' });
+    }
+
+    res.json({
+      success: true,
+      message: `Appeal marked as ${status}`,
+      data: appeal,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+

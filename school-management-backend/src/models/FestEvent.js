@@ -121,6 +121,56 @@ const festEventSchema = new mongoose.Schema({
       C: { type: Number, default: 1 },
     },
   },
+  titlesConfig: {
+    maleChampionTitle: {
+      type: String,
+      default: 'Kalaprathibha', // or "Individual Champion (Boys)"
+    },
+    femaleChampionTitle: {
+      type: String,
+      default: 'Kalathilakam', // or "Individual Champion (Girls)"
+    },
+    generalChampionTitle: {
+      type: String,
+      default: 'Overall Champion',
+    },
+  },
+  appealConfig: {
+    allowed: {
+      type: Boolean,
+      default: true,
+    },
+    fee: {
+      type: Number,
+      default: 500, // standard appeal caution deposit
+    },
+    timeLimitMinutes: {
+      type: Number,
+      default: 60, // 60 mins from result publication
+    },
+  },
+  certificateConfig: {
+    headerTitle: {
+      type: String,
+      default: 'Certificate of Merit & Excellence',
+    },
+    templateStyle: {
+      type: String,
+      default: 'royal_gold', // 'royal_gold', 'modern_navy', 'classic_emerald'
+    },
+    signatory1: {
+      type: String,
+      default: 'General Convener',
+    },
+    signatory2: {
+      type: String,
+      default: 'Principal',
+    },
+    signatory3: {
+      type: String,
+      default: 'Headmaster / General Captain',
+    },
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
