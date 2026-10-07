@@ -19,6 +19,9 @@ class UserModel {
     this.preferences,
   });
 
+  String get fullName => name;
+  String get username => name;
+
   factory UserModel.fromJson(Map<String, dynamic> json) {
     return UserModel(
       id: json['_id'] ?? json['id'] ?? '',

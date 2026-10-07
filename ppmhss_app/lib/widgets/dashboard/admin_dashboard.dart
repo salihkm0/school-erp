@@ -4,6 +4,7 @@ import 'package:flutter_redux/flutter_redux.dart';
 import 'package:school_management/store/app_state.dart';
 import 'package:school_management/actions/dashboard_actions.dart';
 import 'package:school_management/models/dashboard_model.dart';
+import 'package:school_management/models/user_model.dart';
 import 'package:school_management/widgets/common/loading_widget.dart';
 import 'package:school_management/widgets/common/error_widget.dart';
 import 'package:school_management/services/socket_service.dart';
@@ -57,7 +58,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
         final user = vm.user;
         final adminData = vm.data;
-        final adminName = user?.fullName ?? user?.username ?? 'Administrator';
+        final adminName = user?.name.isNotEmpty == true ? user!.name : 'Administrator';
 
         final totalStudents = adminData?.summary.totalStudents ?? 0;
         final totalStaff = adminData?.summary.totalStaff ?? 0;
@@ -435,7 +436,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
 class _AdminVM {
   final AdminDashboardData? data;
-  final dynamic user;
+  final UserModel? user;
   final bool isLoading;
   final String? error;
 

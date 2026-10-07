@@ -4,6 +4,7 @@ import 'package:flutter_redux/flutter_redux.dart';
 import 'package:school_management/store/app_state.dart';
 import 'package:school_management/actions/dashboard_actions.dart';
 import 'package:school_management/models/dashboard_model.dart';
+import 'package:school_management/models/user_model.dart';
 import 'package:school_management/widgets/common/loading_widget.dart';
 import 'package:school_management/widgets/common/error_widget.dart';
 import 'package:school_management/services/socket_service.dart';
@@ -58,7 +59,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
         final user = vm.user;
         final staffData = vm.data;
-        final teacherName = user?.fullName ?? user?.username ?? 'Teacher';
+        final teacherName = user?.name.isNotEmpty == true ? user!.name : 'Teacher';
 
         // Extract class names for top pill chips
         final List<String> classBadges = [];
@@ -403,7 +404,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
 class _StaffVM {
   final StaffDashboardData? data;
-  final dynamic user;
+  final UserModel? user;
   final bool isLoading;
   final String? error;
 

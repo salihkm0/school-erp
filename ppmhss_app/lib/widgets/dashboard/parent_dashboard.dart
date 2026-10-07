@@ -4,6 +4,7 @@ import 'package:flutter_redux/flutter_redux.dart';
 import 'package:school_management/store/app_state.dart';
 import 'package:school_management/actions/dashboard_actions.dart';
 import 'package:school_management/models/dashboard_model.dart';
+import 'package:school_management/models/user_model.dart';
 import 'package:school_management/widgets/common/loading_widget.dart';
 import 'package:school_management/widgets/common/error_widget.dart';
 import 'package:school_management/widgets/common/cartoon_curved_header.dart';
@@ -51,7 +52,7 @@ class _ParentDashboardState extends State<ParentDashboard> {
         final user = vm.user;
         final parentData = vm.data;
         final children = parentData?.children ?? [];
-        final parentName = user?.fullName ?? user?.username ?? 'Parent';
+        final parentName = user?.name.isNotEmpty == true ? user!.name : 'Parent';
 
         final StudentChild? activeChild = (children.isNotEmpty && _selectedChildIndex < children.length)
             ? children[_selectedChildIndex]
@@ -466,7 +467,7 @@ class _ParentDashboardState extends State<ParentDashboard> {
 
 class _ParentVM {
   final ParentDashboardData? data;
-  final dynamic user;
+  final UserModel? user;
   final bool isLoading;
   final String? error;
 
